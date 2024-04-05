@@ -1,0 +1,18 @@
+set pf="Program Files"
+set config=G:\ProjDir\GTFS\cfg
+set geodmsversion=GeoDMS7182
+
+pause
+
+rem At_00h00m04s At_00h08m20s At_00h41m18s At_00h42m37s At_01h51m45s At_01h52m02s At_01h59m58s At_02h01m32s At_02h44m52s At_02h45m40s At_02h49m56s At_03h04m39s At_03h18m46s At_03h21m41s At_03h28m35s At_04h22m57s At_04h35m16s
+
+set list=At_04h43m03s At_04h57m59s At_05h28m44s At_05h30m03s At_05h47m28s At_05h48m57s At_06h08m46s At_06h19m30s At_06h27m43s At_06h34m52s At_06h57m07s At_06h58m55s At_07h09m47s At_07h11m15s At_07h12m09s At_07h12m23s At_07h22m05s At_07h23m19s At_07h28m37s At_07h42m14s At_07h55m44s At_07h56m03s At_08h04m21s At_08h07m56s At_08h13m36s At_08h26m42s At_08h26m52s At_08h32m04s At_08h38m42s At_08h51m05s At_08h51m42s At_08h55m11s At_08h56m50s At_08h59m59s At_09h00m39s At_09h02m11s At_09h17m46s At_09h18m13s At_09h35m04s At_09h37m23s At_09h38m29s At_09h39m08s At_09h47m12s At_09h49m14s At_09h53m07s At_09h59m13s At_10h04m50s At_10h05m02s At_10h13m59s At_10h29m16s At_10h42m40s At_10h55m49s At_11h03m06s At_11h08m03s At_11h25m35s At_11h33m31s At_11h41m31s At_11h59m50s At_12h07m07s At_12h12m46s At_12h14m31s At_12h24m38s At_12h37m47s At_12h49m50s At_13h04m03s At_13h04m23s At_13h31m34s At_13h38m54s At_13h48m47s At_13h52m44s At_14h07m23s At_14h10m14s At_14h30m54s At_14h34m14s At_14h43m03s At_14h54m43s At_15h09m22s At_15h29m02s At_15h31m46s At_15h34m57s At_15h40m45s At_15h52m24s At_16h02m41s At_16h08m49s At_16h13m13s At_16h13m48s At_16h14m58s At_16h17m55s At_16h20m48s At_16h22m28s At_16h23m47s At_16h28m25s At_16h31m43s At_16h45m33s At_17h02m42s At_17h07m12s At_17h08m48s At_17h15m55s At_17h18m35s At_17h20m29s At_17h27m08s At_17h33m25s At_17h51m44s At_17h52m39s At_17h54m37s At_17h57m57s At_18h06m07s At_18h12m27s At_18h12m41s At_18h17m19s At_18h18m18s At_18h24m21s At_18h24m43s At_18h35m12s At_18h38m16s At_18h46m09s At_18h47m46s At_18h58m50s At_19h11m52s At_19h15m59s At_19h22m41s At_19h31m40s At_19h37m42s At_19h39m47s At_20h07m50s At_20h08m53s At_20h32m34s At_20h37m53s At_20h47m32s At_20h55m11s At_21h10m21s At_21h10m31s At_21h18m37s At_21h26m54s At_21h31m11s At_21h48m38s At_22h22m52s At_22h24m07s At_22h24m36s At_22h25m25s At_22h44m16s At_22h54m01s At_23h14m45s At_23h20m17s At_23h20m55s At_23h54m00s
+
+pause
+
+(for %%a in (%list%) do (
+	C:\%pf%\ObjectVision\%geodmsversion%\GeoDmsRun.exe %config%\main.dms NetworkAnalyses/Vilnius_LT_m200/NetworkResults/%%a/ExportAccessIndicators
+))
+
+
+pause

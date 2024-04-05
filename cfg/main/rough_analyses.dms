@@ -1,0 +1,40 @@
+Container rough_analyses {
+	
+	container collect_first_results_etc {
+		parameter<string> resolution:= AnalysesConfiguration/ODResolutions/name[2];
+		parameter<string> time:= AnalysesConfiguration/TimeSampling/MeasureMoments/name[108];
+		
+		unit<uint32> analyzed_cities: nrofrows = 7 {
+			attribute<string> name: ['Athens_GR', 'Lisbon_PT', 'Ljubljana_SI', 'Madrid_ES', 'Praha_CZ', 'Roma_IT', 'Vilnius_LT'];
+			attribute<string> ref:= 'Analyses/'+name+'_'+resolution+'/NetworkResults/'+time;
+			attribute<float32> m_tp:= ='union_data(., '+asItemList('individual_results/'+name+'/m_transper')+')';
+			attribute<float32> mw_tp:= ='union_data(., '+asItemList('individual_results/'+name+'/mw_transper')+')';
+		}
+		container individual_results:= for_each_ne(analyzed_cities/name, 'resultfiles('+analyzed_cities/ref+')');
+		template resultfiles {
+			container inref;
+			
+			parameter<string> filepath:= '%LocalDataProjDir%/'+inref/pathname+'/ai_results.shp';
+			
+			unit<uint32> org_ods:= inref/ODs {
+				attribute<float32> odpop:= float32(Pop);
+			}
+			
+			unit<uint32> loadunit: storagename= "=filepath", storagereadonly = "true" , storagetype = "gdal.vect" {
+				attribute<Definitions/Coordsys> Geometry;
+				attribute<float32> TransPerf;
+				attribute<org_ods>	od_ref:= rlookup(Geometry, org_ods/Point);
+				attribute<float32> Pop:= org_ods/odpop[od_ref];
+			}
+		
+			parameter<float32> m_transper:= mean(loadunit/TransPerf);
+			parameter<float32> mw_transper:= sum(loadunit/TransPerf * loadunit/Pop) / sum(loadunit/Pop);
+			
+			
+		}
+		
+		
+	}
+	
+
+}

@@ -1,0 +1,117 @@
+/**********************************************************************************************************************************
+GTFS routing configuration
+Developed by Chris Jacobs-Crisioni, 2019, 2020
+European Commission, Joint Research Centre, Territorial Development Unit, LUISA team
+
+All code free to use, share and adapt under CC BY-SA 3.0 licensing conditions
+For further information please contact chris.jacobs-crisioni@ec.europa.eu
+***********************************************************************************************************************************/
+
+container StudyAreaPreparation: Using = "Geography;DataManagement;" {
+
+	container SourceData {
+		unit<uint32> FUAs: StorageName = "%DataDir%/_boundaries/FUA_Lau_2021.shp", StorageType = "gdal.vect", StorageReadOnly = "True", DialogData = "line", DialogType = "map" {
+			attribute<CoordSys> Geometry (poly);
+			attribute<string>	Label:= FUA_Name;
+			attribute<string>   ZoneId:= FUA_Id;
+		}
+		unit<uint32> Cities: StorageName = "%DataDir%/_boundaries/City_Lau_2021.shp", StorageType = "gdal.vect", StorageReadOnly = "True", DialogData = "line", DialogType = "map" {
+			attribute<CoordSys> Geometry (poly);
+			attribute<string>	Label:= City_Code;
+			attribute<string>   ZoneId:= City_Code;
+		}
+		unit<uint32> Boundaryset:= union_unit(FUAs, Cities) {
+			attribute<CoordSys> 	Geometry (poly):= union_data(., FUAs/Geometry, Cities/Geometry);
+			attribute<string> 		Label:= union_data(., FUAs/Label, Cities/Label);
+			attribute<string> 		ZoneId:= union_data(., FUAs/ZoneId, Cities/ZoneId);
+			attribute<StudyAreas> 	SA_id:= rlookup(ZoneId, StudyAreas/StudyArea_Def);
+		}
+	}
+
+	container OD_sets: 	expr = "for_each_ne(StudyAreas/Name, 'getODsets('+string(id(StudyAreas))+')')";
+	
+	Template getODsets {
+		parameter<StudyAreas> inArea;
+		parameter<AvailableRoadNetworks> inNetwork: expr = "inArea";
+		parameter<string> pathname: expr = "'%DataDir%/_od_data/'+StudyAreas/Name[inArea]+'/WGS84'";
+		
+		parameter<LambertEA> inBoundary (poly):= SourceData/Boundaryset/Geometry[invert(SourceData/Boundaryset/SA_id)[inArea]];
+		parameter<LambertEA> lcoord:= lower_bound(inBoundary);
+		parameter<LambertEA> ucoord:= upper_bound(inBoundary);
+		parameter<PopulationGrid> ST_LB := lcoord[PopulationGrid];
+		parameter<PopulationGrid> ST_UB := ucoord[PopulationGrid] + Point(1w, 1w);
+		
+		unit<wpoint> PopulationGrid: storagename = "%DataDir%/_popgrid/JRC-GEOSTAT_2018_20210210d_100m.tif", StorageType = "gdal.grid", StorageReadOnly = "True", DialogData = "LambertEA", DialogType = "map" {
+			attribute<uint32> GridData;
+			attribute<uint32> ReadData (raster_100m);
+		}		
+		unit<wpoint> raster_100m:= range(PopulationGrid, ST_LB, ST_UB), DialogData = "LambertEA" {
+			attribute<bool> instudy_area:= poly2grid(inBoundary, .);
+			attribute<uint32> pop:= PopulationGrid/ReadData;
+			attribute<LambertEA> pt:= id(.)[LambertEA] + (getProjectionFactor(raster_100m) / point(2d, 2d));
+			attribute<dpoint> 	wpt:= point(pop[float64], pop[float64], dpoint) * pt[dpoint];
+			attribute<raster_100m> r100m:= id(.);
+			attribute<raster_200m> r200m:= id(.)[raster_200m];
+			attribute<raster_500m> r500m:= id(.)[raster_500m];
+			attribute<raster_1000m> r1000m:= id(.)[raster_1000m];
+		}
+		unit<wpoint> raster_200m:= 
+			range(gridset(LambertEA, getProjectionFactor(raster_100m) * point(2d, 2d), GetProjectionOffset(raster_100m), wpoint), (ST_LB / point(2w, 2w)), (ST_UB / point(2w, 2w)) + point(1w, 1w)), DialogData = "LambertEA" {
+				attribute<uint32> pop:= sum(raster_100m/pop, raster_100m/r200m);
+		}
+		unit<wpoint> raster_500m:= 
+			range(gridset(LambertEA, getProjectionFactor(raster_100m) * point(5d, 5d), GetProjectionOffset(raster_100m), wpoint), (ST_LB / point(5w, 5w)), (ST_UB / point(5w, 5w)) + point(1w, 1w)), DialogData = "LambertEA" {
+				attribute<uint32> pop:= sum(raster_100m/pop, raster_100m/r500m);
+		}
+		unit<wpoint> raster_1000m:= 
+			range(gridset(LambertEA, getProjectionFactor(raster_100m) * point(10d, 10d), GetProjectionOffset(raster_100m), wpoint), (ST_LB / point(10w, 10w)), (ST_UB / point(10w, 10w)) + point(1w, 1w)), DialogData = "LambertEA" {
+				attribute<uint32> pop:= sum(raster_100m/pop, raster_100m/r1000m);
+		}
+		
+		container OD_points:= for_each_ne(AnalysesConfiguration/ODResolutions/name, 'T_create_od_points('+quote('r'+string(AnalysesConfiguration/ODResolutions/val_m)+'m')+', raster_'+string(AnalysesConfiguration/ODResolutions/val_m)+'m)') {
+			parameter<LambertEA> inBoundary (poly):= ../inBoundary;
+		}
+		
+		// Create network for study area
+		
+		parameter<string> setname:= StudyAreas/Name[inArea];
+		
+		parameter<WGS84> StudyArea_latlon (poly):= inBoundary[WGS84];
+		
+		unit<uint32> All_Lines:= NetworkCreation/LoadRoads/Read_lines_fss {
+			
+			attribute<bool> inStudy:= (point_in_polygon(first_point(geometry), StudyArea_latlon)) || (point_in_polygon(last_point(geometry), StudyArea_latlon));
+		}
+		
+		unit<uint32> Study_area_lines:= select_with_org_rel(All_Lines/IsWalkable && All_Lines/inStudy) {
+			attribute<WGS84> Geometry_latlon (arc):= org_rel->Geometry;
+			attribute<CoordSys> Geometry (arc):= Geometry_latlon[CoordSys];
+			attribute<string> 	osm_class:= org_rel->highway;
+		}
+		unit<uint32> Store_study_area_lines:= Study_area_lines, storagename = "= '%LocalDataProjDir%/studyarea_roads/fss/'+setname+'.fss'" {attribute<CoordSys>geometry (arc):= Study_area_lines/Geometry; attribute<string> label:= Study_area_lines/osm_class;}
+		unit<uint32> Load_study_area_lines: storagename = "= propvalue(Store_study_area_lines, 'StorageName')", StorageReadOnly="true" {
+			attribute<CoordSys> Geometry (arc);
+			attribute<string>   label;
+			
+			unit<uint32> store:= Load_study_area_lines, storagename = "= '%LocalDataProjDir%/studyarea_roads/shp/'+setname+'.dbf'" {attribute<.> id:= id(.); attribute<CoordSys>geometry (arc):= ../Geometry, storagename = "= '%LocalDataProjDir%/studyarea_roads/shp/'+setname+'.shp'";}
+		}
+		
+		
+		Template T_create_od_points {
+			parameter<string> in_rm;
+			unit<wpoint> in_raster;
+			
+			parameter<LambertEA> inBoundary (poly):= ../inBoundary;
+			
+			unit<uint32> pts:= ='subset(any(raster_100m/instudy_area, raster_100m/'+in_rm+') && sum(raster_100m/pop, raster_100m/'+in_rm+') > 0)' {
+				attribute<LambertEA> Geometry:= ='(sum(raster_100m/wpt, raster_100m/'+in_rm+')[nr_orgentity] / point(pop[float64], pop[float64], dpoint))[LambertEA]';
+				attribute<WGS84>  Geometry_LL:= Geometry[WGS84];
+				attribute<string> Name:= in_rm+'_z'+string(id(.));
+				attribute<uint32> pop:= in_raster/pop[nr_orgentity];
+				parameter<LambertEA> inBoundary (poly):= ../inBoundary;
+			}
+			
+		
+		}
+	}
+}

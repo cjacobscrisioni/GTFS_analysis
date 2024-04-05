@@ -1,0 +1,589 @@
+/**********************************************************************************************************************************
+GTFS routing configuration
+Developed by Chris Jacobs-Crisioni, 2019, 2020
+European Commission, Joint Research Centre, Territorial Development Unit, LUISA team
+
+All code free to use, share and adapt under CC BY-SA 3.0 licensing conditions
+For further information please contact chris.jacobs-crisioni@ec.europa.eu
+***********************************************************************************************************************************/
+
+container load_GTFS_templates: using = "DataManagement;" {
+	
+	// Combines GTFS results from one study area
+	Template FeedsPerStudyAreaCombiner {
+		parameter<StudyAreas> inArea;
+		
+		parameter<bool> storeFSS: expr = "true", ExplicitSuppliers = "= AsList('LoadFeeds/'+RelevantFeeds/FeedName+'/storeFSS', ';')";
+		
+		unit<uint32> RelevantFeeds: expr = "subset(FeedsPerStudyArea/Area_id = inArea)" {
+			attribute<string> FeedName: 	expr = "AvailableFeeds/Name[FeedsPerStudyArea/Feed_id[Nr_OrgEntity]]";
+			attribute<string> FeedData: 	expr = "AvailableFeeds/Date[FeedsPerStudyArea/Feed_id[Nr_OrgEntity]]";
+			attribute<string> Date_prefix: 	expr = "AvailableFeeds/Date_Prefix[FeedsPerStudyArea/Feed_id[Nr_OrgEntity]]";
+		}
+		
+		unit<uint32> Trips: expr = "= 'union_unit('+AsItemList('LoadFeeds/'+RelevantFeeds/FeedName+'/Trips')+')'" {
+			attribute<uint32>	orgTripId: 	expr = "= 'union_data(.,'+AsItemList('id(LoadFeeds/'+RelevantFeeds/FeedName+'/Trips)')+')'";
+			attribute<uint32>	feedId:		expr = "= 'union_data(.,'+AsItemList('const('+string(id(RelevantFeeds))+', LoadFeeds/'+RelevantFeeds/FeedName+'/Trips, uint32)')+')'";
+			attribute<uint32>   RouteRef:	expr=  "= 'union_data(.,'+AsItemList('LoadFeeds/'+RelevantFeeds/FeedName+'/Trips/RouteRef')+')'";
+			attribute<upoint>	uni_TripId: expr = "point(feedid, orgTripId, upoint)";
+			attribute<bool>		inStudyArea:expr = "= 'any(protoLinks/StopinStudyArea, protoLinks/uni_TripRef)'";
+			
+		}
+		
+		unit<uint32> Stops: expr = "= 'union_unit('+AsItemList('LoadFeeds/'+RelevantFeeds/FeedName+'/Stops')+')'", DialogData = "point", DialogType = "map", FreeData = "False", KeepData = "True"  {
+			attribute<CoordSys> point: 				expr = "= 'union_data(.,'+AsItemList('LoadFeeds/'+RelevantFeeds/FeedName+'/Stops/point')+')'";
+			attribute<uint32>	orgStopId: 			expr = "= 'union_data(.,'+AsItemList('id(LoadFeeds/'+RelevantFeeds/FeedName+'/Stops)')+')'";
+			attribute<uint32> 	feedId:				expr = "= 'union_data(.,'+AsItemList('const('+string(id(RelevantFeeds))+', LoadFeeds/'+RelevantFeeds/FeedName+'/Stops, uint32)')+')'";
+			attribute<upoint>	uni_StopId:			expr = "point(feedId, orgStopId, upoint)";
+			attribute<string>	Name:				expr = "= 'union_data(.,'+AsItemList('LoadFeeds/'+RelevantFeeds/FeedName+'/Stops/stop_name')+')'";
+			attribute<string>	stop_id:			expr = "= 'union_data(.,'+AsItemList('LoadFeeds/'+RelevantFeeds/FeedName+'/Stops/stop_id')+')'";
+			attribute<string> 	LabelText:			expr = "Name", DialogType = "LabelText";
+			attribute<StopsGrid>GridId:				expr = "point[StopsGrid]";
+			attribute<uint32>	Grid1D:				expr = "StopsGrid/uniId[GridId]";
+			attribute<uint32>  	cumu_in_grid:		expr = "cumulate(const(1,.,uint32), GridId) - 1";
+			attribute<upoint>	unique_id:			expr = "point(Grid1D, cumu_in_grid, upoint)";
+			attribute<uint32>	nTransfers:			expr = "StopsGrid/nTransfers[GridId]";
+			
+			unit<spoint> StopsGrid: expr = "MakeStopsGrid/StopsGrid" {
+				attribute<uint32> nStops: 		expr = "pcount(GridId)";
+				attribute<uint32> nTransfers:	expr = "nTop + nRight + nBottom + nLeft + makedefined(sub_or_null(nStops, 1), 0)";
+				attribute<uint32> nTop:			expr = "potential(float32(nStops), float32(Templates/Neighbourhood/Top))[uint32]";
+				//attribute<uint32> nRight:		expr = "potential(float32(nStops), float32(Templates/Neighbourhood/Right))[uint32]";// potentially caused issues as right and left seem inverted
+				attribute<uint32> nRight:		expr = "potential(float32(nStops), float32(Templates/Neighbourhood/Left))[uint32]";
+				attribute<uint32> nBottom:		expr = "potential(float32(nStops), float32(Templates/Neighbourhood/Bottom))[uint32]";
+				//attribute<uint32> nLeft:		expr = "potential(float32(nStops), float32(Templates/Neighbourhood/Left))[uint32]"; // potentially caused issues as right and left seem inverted
+				attribute<uint32> nLeft:		expr = "potential(float32(nStops), float32(Templates/Neighbourhood/Right))[uint32]";
+				attribute<uint32> uniId:		expr = "cumulate(const(1,.,uint32))-1";
+			}
+			
+			container MakeStopsGrid {
+				parameter<CoordSys> bottomleft: 		expr = "point(min(PointRow(point)), min(pointCol(point)), CoordSys)";
+				parameter<CoordSys>	upperright: 		expr = "point(max(PointRow(point)), max(pointCol(point)), CoordSys)";
+				parameter<CoordSys>	resolution:			expr = "point((Parameters/MaxTransferDistKm) * 500d, (Parameters/MaxTransferDistKm) * 500d, CoordSys)";
+				parameter<spoint>	size:				expr = "spoint((upperright - bottomleft) / resolution) + point(1s, 1s, spoint)";
+			
+				unit<spoint> StopsGrid: expr = "range(gridset(CoordSys, resolution, bottomleft, spoint), point(0s, 0s), size)" {
+				
+				}
+			}
+			
+			container ModesServed: expr = "for_each_nedv(AvailableModes/Name, 'sum(uint32(Links/Mode = '+string(AvailableModes/Values)+'), Links/FromStop) + sum(uint32(Links/Mode = '+string(AvailableModes/Values)+'), Links/ToStop)', Stops, uint32)" {
+				attribute<uint32> Total (Stops): expr = "= 'add('+AsItemList(AvailableModes/Name)+')'";
+			}
+		}
+		unit<uint32> Links: expr = "= 'union_unit('+AsItemList('LoadFeeds/'+RelevantFeeds/FeedName+'/ScheduledLinks')+')'", DialogData = "Line", DialogType = "map", FreeData = "False", KeepData = "True" {
+			attribute<CoordSys>			Line (arc):			expr = "= 'union_data(.,'+AsItemList('LoadFeeds/'+RelevantFeeds/FeedName+'/ScheduledLinks/Line')+')'";
+			attribute<uint32>			feedId:				expr = "= 'union_data(.,'+AsItemList('const('+string(id(RelevantFeeds))+', LoadFeeds/'+RelevantFeeds/FeedName+'/ScheduledLinks, uint32)')+')'";
+			attribute<uint32> 			OrgfromStop:		expr = "= 'union_data(.,'+AsItemList('LoadFeeds/'+RelevantFeeds/FeedName+'/ScheduledLinks/fromStop')+')'";
+			attribute<uint32>			OrgtoStop:			expr = "= 'union_data(.,'+AsItemList('LoadFeeds/'+RelevantFeeds/FeedName+'/ScheduledLinks/toStop')+')'";
+			attribute<uint32>			TripRef:			expr = "= 'union_data(.,'+AsItemList('LoadFeeds/'+RelevantFeeds/FeedName+'/ScheduledLinks/TripRef')+')'";
+			attribute<string>			TripId:				expr = "= 'union_data(.,'+AsItemList('LoadFeeds/'+RelevantFeeds/FeedName+'/ScheduledLinks/TripId')+')'";
+			attribute<Trips>			uni_TripRef:		expr = "rlookup(point(feedid, TripRef, upoint), Trips/uni_TripId)";
+			attribute<Time> 			depTime: 			expr = "= 'union_data(.,'+AsItemList('LoadFeeds/'+RelevantFeeds/FeedName+'/ScheduledLinks/depTime')+')'";
+			attribute<Time> 			arrTime: 			expr = "= 'union_data(.,'+AsItemList('LoadFeeds/'+RelevantFeeds/FeedName+'/ScheduledLinks/arrTime')+')'";
+			attribute<Modes> 			Mode:				expr = "= 'union_data(.,'+AsItemList('LoadFeeds/'+RelevantFeeds/FeedName+'/ScheduledLinks/Mode')+')'";
+			attribute<upoint>			uni_fStopId:		expr = "point(feedId, OrgfromStop, upoint)";
+			attribute<upoint>			uni_tStopId:		expr = "point(feedId, OrgtoStop, upoint)";	
+			attribute<Stops>			FromStop:			expr = "rlookup(uni_fStopId, Stops/uni_StopId)";
+			attribute<Stops>			ToStop:				expr = "rlookup(uni_tStopId, Stops/uni_StopId)";
+			attribute<AvailableModes>	avMode_id:			expr = "rlookup(Mode, AvailableModes/Values)";
+			attribute<float32>			EffSpeed:			expr = "float32(arc_length(Links/Line, float64) / 1000d) / (float32(arrTime - depTime) / (60f * 60f))";
+		}
+		
+		unit<uint32> AvailableModes:	expr = "unique(Links/Mode)" {
+			attribute<string> 	Name: 		expr = "Modes/Name[Values]";
+			attribute<string> 	City:		expr = "const(DataManagement/StudyAreas/name[inArea],.,string)";
+			attribute<uint32> 	NrLinks:	expr = "pcount(Links/avMode_id)";
+			attribute<float32>	Dist:		expr = "sum(float32(arc_length(Links/Line, float64)), Links/avMode_id)";
+			attribute<float32>  EffSpeed:	expr = "float32(NrLinks) / sum(1f / Links/EffSpeed, Links/avMode_id)";
+		}
+		
+		container Export {
+			parameter<string> filepaths: expr = "'%LocalDataProjdir%/export/'+StudyAreas/Name[inArea]+'_'+first(RelevantFeeds/FeedData)+'/'";
+			
+			parameter<bool> DataStored: expr = "True", ExplicitSuppliers = "StopsExport;StopsExport/modesserved;LinksExport;";
+			
+			unit<uint32> StopsExport: expr = "Stops", StorageName = "= filepaths + 'Stops.dbf'" {
+				attribute<CoordSys> Geometry: 	expr = "point", StorageName = "= filepaths + 'Stops.shp'";
+				attribute<string> 	Stop_name: 	expr = "Name";
+				attribute<string> 	Stop_id:	expr = "Stops/stop_id";
+				attribute<uint32>	IntStop_id: expr = "id(.)";
+				attribute<string>	Feed_name:	expr = "RelevantFeeds/FeedName[feedId]";
+				
+				container modesserved: expr = "for_each_nedva(AvailableModes/Name, 'Stops/ModesServed/'+AvailableModes/Name, Stops, uint32, filepaths + 'Stops.dbf')";
+			}
+			unit<uint32> LinksExport: expr = "Links", StorageName = "= filepaths + 'Links.dbf'" {
+				attribute<CoordSys> Geometry (arc): expr = "Line", StorageName = "= filepaths + 'Links.shp'";
+				attribute<string> 	sdepTime:		expr = "first(RelevantFeeds/Date_Prefix) +  Time/LabelText[depTime]";
+				attribute<string> 	sarrTime:		expr = "first(RelevantFeeds/Date_Prefix) +  Time/LabelText[arrTime]";
+				attribute<string>   TripId:			expr = "Links/TripId";
+				attribute<uint32>	Mode:			expr = "Links/Mode";
+				attribute<uint32> 	FromStop:		expr = "Links/FromStop";
+				attribute<uint32> 	ToStop:			expr = "Links/ToStop";
+				attribute<string>	Fstop_id:		expr = "Stops/Stop_id[FromStop]";
+				attribute<string>	Tstop_id:		expr = "Stops/Stop_id[ToStop]";
+			}
+		}
+		
+		
+	}
+	
+	Template LoadCsvThroughGDAL {
+		unit<uint32> File_Structure;
+		parameter<File_Structure> inFile;
+		parameter<AvailableFeeds> inFeed;
+		
+		container write_to_fss
+		{
+		   unit<uint32> data
+		   : StorageName     = "= '%DataDir%/_feeds/'+AvailableFeeds/Name[inFeed]+'/'+File_Structure/Name[inFile]+'.csv'"
+		   , StorageType     = "gdal.vect"
+		   , StorageReadOnly = "True";
+
+			unit<uint32> name := SubItem_PropValues(data,'name');
+			
+			container to_fss_domain : StorageName = "= '%DataDir%/_feeds/fss/'+AvailableFeeds/Name[inFeed]+'/'+File_Structure/Name[inFile]+'_domain.fss'"
+			{
+				unit<uint32> domain := data;
+			}
+	
+			container to_fss := for_each_nedv(name/name, 'data/' + name/name, to_fss_domain/domain, string),
+				StorageName = "= '%DataDir%/_feeds/fss/'+AvailableFeeds/Name[inFeed]+'/'+File_Structure/Name[inFile]+'.fss'" {
+					unit<uint32> domain: expr = "to_fss_domain/domain";
+				}
+		}
+		
+		unit<uint32> name := SubItem_PropValues(write_to_fss/Data,'name'); 
+
+		container readdomain
+		:   StorageName = "='%DataDir%/_feeds/fss/'+AvailableFeeds/Name[inFeed]+'/'+File_Structure/Name[inFile]+'_domain.fss'"
+		,   StorageReadOnly = "True"
+		{
+			unit<uint32> domain;
+		}
+
+		container from_fss := 
+			for_each_ndv(name/name, readdomain/domain, string)
+		,   StorageName     = "='%DataDir%/_feeds/fss/'+AvailableFeeds/Name[inFeed]+'/'+File_Structure/Name[inFile]+'.fss'"
+		,   StorageReadOnly = "True";
+		
+		//container from_fss := for_each_ndv(name/name, fssdomain, string), StorageName = "= '%DataDir%/_feeds/fss/'+AvailableFeeds/Name[inFeed]+'/'+File_Structure/Name[inFile]+'.fss'", StorageReadOnly = "True";
+		
+		parameter<bool> stored: expr = "!(ExistingFile('x:/x','%DataDir%/_feeds/fss/'+AvailableFeeds/Name[inFeed]+'/'+File_Structure/Name[inFile]+'.fss') = 'x:/x')";
+		
+		container dataLink: 				expr = "= Stored ? 'from_fss' : 'write_to_fss/to_fss'";
+		
+		unit<uint32> refdomain: expr = "= Stored ? 'readdomain/domain' : 'write_to_fss/to_fss/domain'";
+	}
+	
+	Template doDateSelection {
+		
+		container Data;
+		unit<uint32> Services;
+		
+		unit<uint32> Calendar:			expr = "Data/Calendar/refdomain", ExplicitSuppliers = "LoadCsvs/Calendar/dataLink" {
+			attribute<string> monday:					expr = "Data/Calendar/dataLink/monday";
+			attribute<string> tuesday:					expr = "Data/Calendar/dataLink/tuesday";
+			attribute<string> wednesday:				expr = "Data/Calendar/dataLink/wednesday";
+			attribute<string> thursday:					expr = "Data/Calendar/dataLink/thursday";
+			attribute<string> friday:					expr = "Data/Calendar/dataLink/friday";
+			attribute<string> saturday:					expr = "Data/Calendar/dataLink/saturday";
+			attribute<string> sunday:					expr = "Data/Calendar/dataLink/sunday";
+			attribute<string> service_id:				expr = "Data/Calendar/dataLink/service_id";
+			attribute<uint32> nStartDate: 				expr = "uint32(Data/Calendar/dataLink/start_date)";
+			attribute<uint32> nEndDate: 				expr = "uint32(Data/Calendar/dataLink/end_date)";
+			attribute<bool>	  Today_in_daterange:		expr = "uint32(AvailableFeeds/Date[inFeed]) >= nStartDate && uint32(AvailableFeeds/Date[inFeed]) <= nEndDate";
+			attribute<bool>	  Yesterday_in_daterange:	expr = "uint32(AvailableFeeds/PrevDate[inFeed]) >= nStartDate && uint32(AvailableFeeds/PrevDate[inFeed]) <= nEndDate";
+		}
+		unit<uint32> Calendar_dates:	expr = "Data/Calendar_dates/refdomain", ExplicitSuppliers = "LoadCsvs/Calendar_dates/dataLink"  {
+			attribute<uint32> 	nDate:			expr = "uint32(Data/Calendar_dates/dataLink/date)";
+			attribute<uint32>	nType:			expr = "uint32(Data/Calendar_dates/dataLink/exception_type)";
+			attribute<Services> ServicesRef:	expr = "rlookup(Data/Calendar_dates/dataLink/service_id, Services/Values)";
+			attribute<uint32> 	Today:			expr = "uint32(uint32(AvailableFeeds/Date[inFeed]) = nDate)";  
+			attribute<uint32>	Yesterday:		expr = "uint32(uint32(AvailableFeeds/PrevDate[inFeed]) = nDate)";
+		}
+	}
+	
+	// Vilnius template for GTFS feeds
+	// ... Schedule organized in Stop times (arrival, departure)
+	// ... No transfers defined
+	// [other specifics to be learned later on sources.]
+	Template LoadGTFSfiles_Vilnius {
+		parameter<AvailableFeeds> 	inFeed;
+		parameter<bool> 			storefss: expr = "True", ExplicitSuppliers = "= AsList('LoadCsvs/'+File_Structure/Name+'/write_to_fss/to_fss',';')";
+		unit<uint32> File_Structure: NrOfRows = 8 {attribute<string> Name: ['agency','calendar','calendar_dates','routes','shapes','stop_times','stops','trips'];}
+		
+		container LoadCsvs: 	expr = "for_each_ne(File_Structure/Name, 'LoadCsvThroughGDAL(File_Structure,'+string(id(File_Structure))+',inFeed)')";
+		
+		unit<uint32> protoStops: expr = "LoadCsvs/Stops/refdomain", DialogData = "point", DialogType = "map", ExplicitSuppliers = "LoadCsvs/Stops/dataLink" {
+			attribute<float64>	stop_lat:		expr = "float64(LoadCsvs/Stops/dataLink/stop_lat)";
+			attribute<float64>	stop_lon:		expr = "float64(LoadCsvs/Stops/dataLink/stop_lon)";
+			attribute<string> 	stop_name:		expr = "LoadCsvs/Stops/dataLink/stop_name";
+			attribute<CoordSys> point: 			expr = "point(float64(stop_lat), float64(stop_lon), WGS84)[CoordSys]"; //includes conversion to active coordinate system
+			attribute<string> 	stop_id:		expr = "LoadCsvs/Stops/dataLink/stop_id";
+			attribute<string> 	LabelText: 		expr = "LoadCsvs/Stops/dataLink/stop_name", DialogType = "LabelText";
+			attribute<bool>		StopUsed:		expr = "any(AllStopTimes/SelToday, AllStopTimes/pStopRef) || any(AllStopTimes/SelYesterday, AllStopTimes/pStopRef)";
+		}
+		unit<uint32> Stops: expr = "subset(protoStops/StopUsed)", DialogData = "point", DialogType = "map" {
+			attribute<float64>	stop_lat:	expr = "float64(protoStops/stop_lat[Nr_OrgEntity])";
+			attribute<float64>	stop_lon:	expr = "float64(protoStops/stop_lon[Nr_OrgEntity])";
+			attribute<string> 	stop_name:	expr = "protoStops/stop_name[Nr_OrgEntity]";
+			attribute<string>	stop_id:	expr = "protoStops/stop_id[Nr_OrgEntity]";
+			attribute<WGS84> 	wgspoint: 	expr = "point(float64(stop_lat), float64(stop_lon), WGS84)";
+			attribute<CoordSys> point: 		expr = "wgspoint[CoordSys]";
+			attribute<string> 	LabelText: 	expr = "stop_name", DialogType = "LabelText";
+		}
+		unit<uint32> ScheduledLinks: expr = "union_unit(AllStopTimes/Yesterday/Links, AllStopTimes/Today/Links)", DialogData = "Line", DialogType = "map" {
+			attribute<CoordSys>	Line (arc):	expr = "union_data(., AllStopTimes/Yesterday/Links/Line, 		AllStopTimes/Today/Links/Line)";
+			attribute<Stops> 	fromStop:	expr = "union_data(., AllStopTimes/Yesterday/Links/fromStop, 	AllStopTimes/Today/Links/fromStop)";
+			attribute<Stops>	toStop:		expr = "union_data(., AllStopTimes/Yesterday/Links/toStop, 		AllStopTimes/Today/Links/toStop)";
+			attribute<Time> 	depTime: 	expr = "union_data(., AllStopTimes/Yesterday/Links/depTime, 	AllStopTimes/Today/Links/depTime)";
+			attribute<Time> 	arrTime: 	expr = "union_data(., AllStopTimes/Yesterday/Links/arrTime, 	AllStopTimes/Today/Links/arrTime)";
+			attribute<uint32>   TripRef:	expr = "union_data(., AllStopTimes/Yesterday/Links/TripRef,  	AllStopTimes/Today/Links/TripRef)";
+			attribute<string> 	TripId:		expr = "DataManagement/AvailableFeeds/Name[inFeed]+'_'+Trips/trip_id[TripRef]";
+			attribute<Modes>	Mode:		expr = "Trips/Mode[TripRef]";
+		}
+		container DateSelection: expr = "doDateSelection(LoadCsvs, Services)";
+		unit<uint32> Calendar: expr = "DateSelection/Calendar"; unit<uint32> Calendar_dates: expr = "DateSelection/Calendar_dates";
+		
+		unit<uint32> Services: expr = "unique(Trips/service_id)" {
+			attribute<uint32> 	Today_exc:		expr = "sum(Calendar_dates/Today * Calendar_dates/nType, Calendar_dates/ServicesRef)";
+			attribute<uint32> 	Yesterday_exc:	expr = "sum(Calendar_dates/Yesterday * Calendar_dates/nType, Calendar_dates/ServicesRef)";
+		}
+		unit<uint32> Routes: expr = "LoadCsvs/Routes/refdomain", DialogType = "map", ExplicitSuppliers = "LoadCsvs/Routes/dataLink" {
+			attribute<string> route_id: 	expr = "LoadCsvs/Routes/dataLink/route_id";
+			attribute<string> route_type:	expr = "LoadCsvs/Routes/dataLink/route_type";
+		}
+		unit<uint32> Trips: expr = "LoadCsvs/Trips/refdomain", KeepData = "True", FreeData = "False", ExplicitSuppliers = "LoadCsvs/Trips/dataLink" {
+			
+			attribute<string> 		trip_nr:		expr = "string(id(.))";
+			attribute<string>		trip_id:		expr = "LoadCsvs/Trips/dataLink/trip_id";
+			attribute<string>		route_id:		expr = "LoadCsvs/Trips/dataLink/route_id";
+			attribute<string>		service_id:		expr = "LoadCsvs/Trips/dataLink/service_id";
+			attribute<Routes>		RouteRef:		expr = "rlookup(route_id, Routes/route_id)";
+			attribute<Modes>		Mode:			expr = "rlookup(uint32(Routes/route_type)[RouteRef], Modes/ModeNr)";
+			attribute<Calendar>		CalendarRef:	expr = "rlookup(service_id, Calendar/service_id)";
+			attribute<Services> 	ServicesRef:	expr = "rlookup(service_id, Services/Values)";
+			attribute<bool>			act_today:		expr = "= 'bool(Calendar/'+Weekdays/Name[AvailableFeeds/Today[inFeed]]+'[CalendarRef]) && Calendar/Today_in_daterange[CalendarRef]'";
+			attribute<bool>			act_yesterday:	expr = "= 'bool(Calendar/'+Weekdays/Name[AvailableFeeds/Yesterday[inFeed]]+'[CalendarRef]) && Calendar/Yesterday_in_daterange[CalendarRef]'";
+			attribute<bool>			sel_today:		expr = "(act_today && !Services/Today_exc[ServicesRef] = 2) || (Services/Today_exc[ServicesRef] = 1)";
+			attribute<bool>			sel_yesterday:	expr = "(act_yesterday && !Services/Yesterday_exc[ServicesRef] = 2) || (Services/Yesterday_exc[ServicesRef] = 1)";
+			attribute<Trips_x_order> first_txo:		expr = "min_index(Trips_x_order/ord, Trips_x_order/trip_rel)";
+		}
+			
+		unit<uint32> Trips_x_order:= unique(AllStopTimes/Ordinal_x_Trip) 
+		{
+			attribute<Trips> trip_rel: expr = "pointRow(Values)[Trips]";
+			attribute<uint32> ord:     expr = "pointCol(Values)";
+		}
+		unit<uint32> AllStopTimes:	expr = "LoadCsvs/Stop_times/refdomain",  KeepData = "True", FreeData = "False", ExplicitSuppliers = "LoadCsvs/Stop_times/dataLink" {
+			attribute<Trips>		TripRef:		expr = "rlookup(LoadCsvs/Stop_times/dataLink/trip_id, Trips/trip_id)";
+			attribute<bool>			SelToday:		expr = "Trips/sel_today[TripRef]";
+			attribute<bool>			SelYesterday:	expr = "Trips/sel_yesterday[TripRef] && (Time/Day[departureTime/TimesVector/TimeRef] > 0)";
+			attribute<protoStops>	pStopRef:		expr = "rlookup(LoadCsvs/Stop_times/dataLink/stop_id, protoStops/stop_id)";
+			attribute<Stops>		StopRef: 		expr = "rlookup(LoadCsvs/Stop_times/dataLink/stop_id, Stops/stop_id)";
+			attribute<uint32>		Ordinal:		expr = "uint32(LoadCsvs/Stop_times/dataLink/stop_sequence)"; 
+			attribute<upoint>       Ordinal_x_Trip	:= point(TripRef, Ordinal, upoint);
+			attribute<Trips_x_order>txo_rel       	:= rlookup(Ordinal_x_Trip, Trips_x_order/Values);
+			attribute<uint32>       ordered_ord   	:= txo_rel - Trips/first_txo[TripRef];
+			attribute<upoint>       ThisStopUni  	:= point(TripRef, ordered_ord, upoint);
+			attribute<upoint>       NextStopUni  	:= point(TripRef, ordered_ord+1, upoint);
+			attribute<AllStopTimes> NextStopId   	:= rlookup(NextStopUni, ThisStopUni);
+			attribute<CoordSys> 	FromPoint: 		expr = "Stops/point[StopRef]";
+			attribute<CoordSys>	 	NextPoint:		expr = "Stops/point[StopRef[NextStopId]]";
+			attribute<bool>			EndPoint:		expr = "IsNull(NextStopId)";
+			
+			container departureTime: 	expr = "getTimes(AllStopTimes, 	LoadCsvs/Stop_times/dataLink/departure_time)";
+			container arrivalTime: 		expr = "getTimes(AllStopTimes,	LoadCsvs/Stop_times/dataLink/arrival_time)";
+		
+			container Yesterday {
+				unit<uint32> Links: expr = "subset(SelYesterday && !EndPoint)" {
+					attribute<CoordSys> FromPoint: 			expr = "AllStopTimes/FromPoint[Nr_OrgEntity]";
+					attribute<CoordSys> ToPoint:			expr = "AllStopTimes/NextPoint[Nr_OrgEntity]";
+					attribute<CoordSys>	Line (arc):			expr = "points2sequence(GenLines/Points,GenLines/Seq,GenLines/Ord)";
+					attribute<Trips>	TripRef:			expr = "AllStopTimes/TripRef[Nr_OrgEntity]";
+					attribute<Stops> 	fromStop:			expr = "AllStopTimes/StopRef[Nr_OrgEntity]";
+					attribute<Stops>	toStop:				expr = "AllStopTimes/StopRef[NextStopId[Nr_OrgEntity]]";
+					attribute<Time> 	depTime: 			expr = "departureTime/TimesVector/TimeRef[Nr_OrgEntity] - (24*60*60)";
+					attribute<Time> 	arrTime: 			expr = "arrivalTime/TimesVector/TimeRef[NextStopId[Nr_OrgEntity]] - (24*60*60)";
+				}
+				unit<uint32> GenLines: 	expr = "union_unit(Links, Links)" {
+					attribute<CoordSys> 		Points:		expr = "union_data(., Links/FromPoint, Links/ToPoint)";
+					attribute<Links>			Seq:		expr = "union_data(., id(Links), id(Links))";
+					attribute<uint32> 			Ord:		expr = "union_data(., const(0,Links,uint32), const(1,Links,uint32))";
+				}
+			}
+			container Today  {
+				unit<uint32> Links: expr = "subset(SelToday && !EndPoint)" {
+					attribute<CoordSys> FromPoint: 			expr = "AllStopTimes/FromPoint[Nr_OrgEntity]";
+					attribute<CoordSys> ToPoint:			expr = "AllStopTimes/NextPoint[Nr_OrgEntity]";
+					attribute<CoordSys>	Line (arc):			expr = "points2sequence(GenLines/Points,GenLines/Seq,GenLines/Ord)";
+					attribute<Trips>	TripRef:			expr = "AllStopTimes/TripRef[Nr_OrgEntity]";
+					attribute<Stops> 	fromStop:			expr = "AllStopTimes/StopRef[Nr_OrgEntity]";
+					attribute<Stops>	toStop:				expr = "AllStopTimes/StopRef[NextStopId[Nr_OrgEntity]]";
+					attribute<Time> 	depTime: 			expr = "departureTime/TimesVector/TimeRef[Nr_OrgEntity]";
+					attribute<Time> 	arrTime: 			expr = "arrivalTime/TimesVector/TimeRef[NextStopId[Nr_OrgEntity]]";
+				}
+				unit<uint32> GenLines: 	expr = "union_unit(Links, Links)" {
+					attribute<CoordSys> 		Points:		expr = "union_data(., Links/FromPoint, Links/ToPoint)";
+					attribute<Links>			Seq:		expr = "union_data(., id(Links), id(Links))";
+					attribute<uint32> 			Ord:		expr = "union_data(., const(0,Links,uint32), const(1,Links,uint32))";
+				}
+			}
+		}
+	}
+	
+	
+	// Lisbon metro template for GTFS feeds
+	// [other specifics to be learned later on sources.]
+	Template LoadGTFSfiles_LisbonMetro {
+		parameter<AvailableFeeds> inFeed;
+		parameter<bool> 			storefss: expr = "True", ExplicitSuppliers = "= AsList('LoadCsvs/'+File_Structure/Name+'/write_to_fss/to_fss',';')";
+		
+		unit<uint32> File_Structure: NrOfRows = 9 {
+			attribute<string> Name: ['agency','calendar','calendar_dates','routes','shapes','stop_times','stops','trips','frequencies'];
+		}
+		
+		container LoadCsvs: 	expr = "for_each_ne(File_Structure/Name, 'LoadCsvThroughGDAL(File_Structure,'+string(id(File_Structure))+',inFeed)')";
+		
+		unit<uint32> protoStops: expr = "LoadCsvs/Stops/refdomain", DialogData = "point", DialogType = "map", ExplicitSuppliers = "LoadCsvs/Stops/dataLink" {
+			attribute<float64>	stop_lat:	expr = "float64(LoadCsvs/Stops/dataLink/stop_lat)";
+			attribute<float64>	stop_lon:	expr = "float64(LoadCsvs/Stops/dataLink/stop_lon)";
+			attribute<string> 	stop_name:	expr = "LoadCsvs/Stops/dataLink/stop_name";
+			attribute<CoordSys> point: 		expr = "point(float64(stop_lat), float64(stop_lon), WGS84)[CoordSys]";
+			attribute<string> 	stop_id:	expr = "LoadCsvs/Stops/dataLink/stop_id";
+			attribute<string> 	LabelText: 	expr = "LoadCsvs/Stops/dataLink/stop_name", DialogType = "LabelText";
+			attribute<bool>		StopUsed:	expr = "any(AllStopTimes/SelToday, AllStopTimes/pStopRef) || any(AllStopTimes/SelYesterday, AllStopTimes/pStopRef)";
+		}
+		unit<uint32> Stops: expr = "subset(protoStops/StopUsed)", DialogData = "point", DialogType = "map" {
+			attribute<float64>	stop_lat:	expr = "float64(protoStops/stop_lat[Nr_OrgEntity])";
+			attribute<float64>	stop_lon:	expr = "float64(protoStops/stop_lon[Nr_OrgEntity])";
+			attribute<string> 	stop_name:	expr = "protoStops/stop_name[Nr_OrgEntity]";
+			attribute<string>	stop_id:	expr = "protoStops/stop_id[Nr_OrgEntity]";
+			attribute<CoordSys> point: 		expr = "point(float64(stop_lat), float64(stop_lon), WGS84)[CoordSys]";
+			attribute<string> 	LabelText: 	expr = "stop_name", DialogType = "LabelText";
+		}
+		unit<uint32> Frequencies: expr = "LoadCsvs/Frequencies/refdomain", FreeData = "False", ExplicitSuppliers = "LoadCsvs/Frequencies/dataLink" {
+			container startTime: 	expr = "getTimes(Frequencies, LoadCsvs/Frequencies/dataLink/start_time)";
+			container endTime: 		expr = "getTimes(Frequencies, LoadCsvs/Frequencies/dataLink/end_time)";
+			attribute<string> 			LabelText: 		expr = "LoadCsvs/Frequencies/dataLink/trip_id + ' from ' + Time/labelText[regime_start] + ' to ' + Time/labelText[regime_end]", DialogType = "LabelText";
+			attribute<Trips>			TripRef:		expr = "rlookup(LoadCsvs/Frequencies/dataLink/trip_id, Trips/trip_id)";
+			attribute<Time>				regime_start: 	expr = "startTime/TimesVector/TimeRef";
+			attribute<Time>				regime_end: 	expr = "endTime/TimesVector/TimeRef";
+			attribute<Time> 			regime_length: 	expr = "regime_end > regime_start ? regime_end - regime_start : (24*60*60 + regime_end) - regime_start";
+			attribute<Time>				headway:		expr = "uint32(LoadCsvs/Frequencies/dataLink/headway_secs)[Time]";
+			attribute<uint32>			regime_trips:	expr = "uint32(round(float32(regime_length) / float32(headway)))";
+			attribute<uint32>			cumul_trips:	expr = "cumulate(regime_trips) - regime_trips";
+		}
+		unit<uint32> AllTripStarts: expr = "range(uint32, 0, sum(Frequencies/regime_trips))" {
+			attribute<Frequencies>		proto_Freq_id:	expr = "rlookup(id(.), Frequencies/cumul_trips)";
+			attribute<Frequencies>		Freq_id:		expr = "cumulate(uint32(IsDefined(proto_Freq_id)))-1";
+			attribute<Time>		   		Regime_Start:	expr = "Frequencies/regime_start[Freq_id]";
+			attribute<Time>				Regime_End:		expr = "Frequencies/regime_end[Freq_id]";
+			attribute<uint32>			Regime_ord:		expr = "id(.) - Frequencies/cumul_trips[Freq_id]";
+			attribute<Time>				Move_Start:		expr = "Regime_Start + (Regime_ord * Frequencies/headway[Freq_id])";
+			attribute<Trips>	   		TripRef: 		expr = "Frequencies/TripRef[Freq_id]";
+			attribute<uint32>			Trip_ord:		expr = "cumulate(const(1,.,uint32), TripRef)-1";
+			attribute<upoint>			uni_id:			expr = "point(TripRef, Trip_ord, upoint)";
+		}
+		unit<uint32> ScheduledLinks: expr = "union_unit(Trips/TodaySchedule/NoFrequencyLinks, 						Trips/TodaySchedule/FrequencyLinks, 			Trips/YesterdaySchedule/NoFrequencyLinks,  			Trips/YesterdaySchedule/ActiveFrequencyLinks)", DialogData = "Line", DialogType = "map" {
+			attribute<CoordSys>	Line (arc): expr = "union_data(., Trips/TodaySchedule/NoFrequencyLinks/Line, 		Trips/TodaySchedule/FrequencyLinks/Line, 		Trips/YesterdaySchedule/NoFrequencyLinks/Line,		Trips/YesterdaySchedule/ActiveFrequencyLinks/Line)";
+			attribute<Stops> 	fromStop:	expr = "union_data(., Trips/TodaySchedule/NoFrequencyLinks/fromStop, 	Trips/TodaySchedule/FrequencyLinks/fromStop, 	Trips/YesterdaySchedule/NoFrequencyLinks/fromStop,	Trips/YesterdaySchedule/ActiveFrequencyLinks/fromStop)";
+			attribute<Stops> 	toStop:		expr = "union_data(., Trips/TodaySchedule/NoFrequencyLinks/toStop, 		Trips/TodaySchedule/FrequencyLinks/toStop, 		Trips/YesterdaySchedule/NoFrequencyLinks/toStop,	Trips/YesterdaySchedule/ActiveFrequencyLinks/toStop)";
+			attribute<Time>		depTime:	expr = "union_data(., Trips/TodaySchedule/NoFrequencyLinks/depTime, 	Trips/TodaySchedule/FrequencyLinks/depTime, 	Trips/YesterdaySchedule/NoFrequencyLinks/depTime,	Trips/YesterdaySchedule/ActiveFrequencyLinks/depTime)";
+			attribute<Time>		arrTime:	expr = "union_data(., Trips/TodaySchedule/NoFrequencyLinks/arrTime, 	Trips/TodaySchedule/FrequencyLinks/arrTime, 	Trips/YesterdaySchedule/NoFrequencyLinks/arrTime,	Trips/YesterdaySchedule/ActiveFrequencyLinks/arrTime)";
+			attribute<Trips>   TripRef:	expr = "union_data(., Trips/TodaySchedule/NoFrequencyLinks/TripRef,  	Trips/TodaySchedule/FrequencyLinks/TripRef, 	Trips/YesterdaySchedule/NoFrequencyLinks/TripRef,	Trips/YesterdaySchedule/ActiveFrequencyLinks/TripRef)";
+			attribute<Modes>	Mode:		expr = "Trips/Mode[TripRef]";
+		}
+		container DateSelection: expr = "doDateSelection(LoadCsvs, Services)";
+		unit<uint32> Calendar: expr = "DateSelection/Calendar"; unit<uint32> Calendar_dates: expr = "DateSelection/Calendar_dates";
+		unit<uint32> Services: expr = "unique(Trips/service_id)" {
+			attribute<uint32> 	Today_exc:		expr = "sum(Calendar_dates/Today * Calendar_dates/nType, Calendar_dates/ServicesRef)";
+			attribute<uint32> 	Yesterday_exc:	expr = "sum(Calendar_dates/Yesterday * Calendar_dates/nType, Calendar_dates/ServicesRef)";
+		}
+		unit<uint32> Routes: expr = "LoadCsvs/Routes/refdomain", KeepData = "True", FreeData = "False", ExplicitSuppliers = "LoadCsvs/Routes/dataLink" {
+			attribute<string> route_id: 	expr = "LoadCsvs/Routes/dataLink/route_id";
+			attribute<string> route_type:	expr = "LoadCsvs/Routes/dataLink/route_type";
+			attribute<Modes>  Mode:			expr = "route_type[Modes]";
+		}
+		unit<uint32> Trips: expr = "LoadCsvs/Trips/refdomain", KeepData = "True", FreeData = "True", ExplicitSuppliers = "LoadCsvs/Trips/dataLink" {
+			
+			attribute<string> 		trip_nr:		expr = "string(id(.))";
+			attribute<string>		trip_id:		expr = "LoadCsvs/Trips/dataLink/trip_id";
+			attribute<string>		route_id:		expr = "LoadCsvs/Trips/dataLink/route_id";
+			attribute<string>		service_id:		expr = "LoadCsvs/Trips/dataLink/service_id";
+			attribute<Routes>		RouteRef:		expr = "rlookup(route_id, Routes/route_id)";
+			attribute<Modes>		Mode:			expr = "(Routes/route_type[RouteRef])[Modes]";
+			//attribute<uint32>		nlinks:			expr = "pcount(TimesPerStop/Links/Trip)";
+			attribute<Time>			Freq_Regime_start:	expr = "min(Frequencies/regime_start, Frequencies/TripRef)";
+			attribute<Time>			Freq_Regime_end:	expr = "max(Frequencies/regime_end, Frequencies/TripRef)";
+			attribute<Time>			First_start:	expr = "IsDefined(Freq_Regime_start) && Freq_Regime_start < #Time ? Freq_Regime_start : min(AllStopTimes/departureTime/TimesVector/TimeRef, AllStopTimes/TripRef)";
+			attribute<uint32>		nTripStarts:	expr = "MakeDefined(pcount(AllTripStarts/TripRef), 1)";
+			attribute<bool>			hasFrequency:	expr = "pcount(Frequencies/TripRef) > 0";
+			//attribute<string>		LinkSeq:		expr = "AsList(string(id(TimesPerStop/Links)),',',TimesPerStop/Links/Trip)";
+			attribute<Calendar>		CalendarRef:	expr = "rlookup(service_id, Calendar/service_id)";
+			attribute<Services> 	ServicesRef:	expr = "rlookup(service_id, Services/Values)";
+			attribute<bool>			act_today:		expr = "= 'bool(Calendar/'+Weekdays/Name[AvailableFeeds/Today[inFeed]]+'[CalendarRef]) && Calendar/Today_in_daterange[CalendarRef]'";
+			attribute<bool>			act_yesterday:	expr = "= 'bool(Calendar/'+Weekdays/Name[AvailableFeeds/Yesterday[inFeed]]+'[CalendarRef]) && Calendar/Yesterday_in_daterange[CalendarRef]'";
+			attribute<bool>			sel_today:		expr = "(act_today && !Services/Today_exc[ServicesRef] = 2) || (Services/Today_exc[ServicesRef] = 1)";
+			attribute<bool>			sel_yesterday:	expr = "(act_yesterday && !Services/Yesterday_exc[ServicesRef] = 2) || (Services/Yesterday_exc[ServicesRef] = 1)";
+			attribute<Trips_x_order> first_txo:		expr = "min_index(Trips_x_order/ord, Trips_x_order/trip_rel)";
+			
+			unit<uint32> TodaysFrequencyTrips: 		expr = "subset(hasFrequency && sel_today)";
+			unit<uint32> YesterdaysFrequencyTrips: 	expr = "subset(hasFrequency && sel_yesterday)";
+			
+			container TodaySchedule: 		expr = "GetScheduledFrequencyLinks(AllStopTimes/Today/links, TodaysFrequencyTrips, 0)" {
+				unit<uint32> NoFrequencyLinks: expr = "subset(!hasFrequency[inLinks/TripRef] && sel_today[inLinks/TripRef])" {
+					attribute<CoordSys> Line (arc): expr = "inLinks/Line[Nr_OrgEntity]";
+					attribute<Stops> 	fromStop:	expr = "inLinks/fromStop[Nr_OrgEntity]";
+					attribute<Stops> 	toStop:		expr = "inLinks/toStop[Nr_OrgEntity]";
+					attribute<Time>		depTime:	expr = "inLinks/depTime[Nr_OrgEntity]";
+					attribute<Time>		arrTime:	expr = "inLinks/arrTime[Nr_OrgEntity]";
+					attribute<Trips>	TripRef:	expr = "inLinks/TripRef[Nr_OrgEntity]";
+				}
+			}
+			container YesterdaySchedule: 	expr = "GetScheduledFrequencyLinks(AllStopTimes/Yesterday/links, YesterdaysFrequencyTrips, (24*60*60)[Time])" {
+				unit<uint32> NoFrequencyLinks: expr = "subset(!hasFrequency[inLinks/TripRef] &&  sel_yesterday[inLinks/TripRef] && (Time/Day[inLinks/depTime] > 0))" {
+					attribute<CoordSys> Line (arc): expr = "inLinks/Line[Nr_OrgEntity]";
+					attribute<Stops> 	fromStop:	expr = "inLinks/fromStop[Nr_OrgEntity]";
+					attribute<Stops> 	toStop:		expr = "inLinks/toStop[Nr_OrgEntity]";
+					attribute<Time>		depTime:	expr = "inLinks/depTime[Nr_OrgEntity]";
+					attribute<Time>		arrTime:	expr = "inLinks/arrTime[Nr_OrgEntity]";
+					attribute<Trips>	TripRef:	expr = "inLinks/TripRef[Nr_OrgEntity]";
+				}
+				unit<uint32> ActiveFrequencyLinks: expr = "subset(IsDefined(FrequencyLinks/depTime) && FrequencyLinks/depTime < #Time)" {
+					attribute<CoordSys> Line (arc): expr = "FrequencyLinks/Line[Nr_OrgEntity]";
+					attribute<Stops> 	fromStop:	expr = "FrequencyLinks/fromStop[Nr_OrgEntity]";
+					attribute<Stops> 	toStop:		expr = "FrequencyLinks/toStop[Nr_OrgEntity]";
+					attribute<Time>		depTime:	expr = "FrequencyLinks/depTime[Nr_OrgEntity]";
+					attribute<Time>		arrTime:	expr = "FrequencyLinks/arrTime[Nr_OrgEntity]";
+					attribute<Trips>	TripRef:	expr = "FrequencyLinks/TripRef[Nr_OrgEntity]";
+				}
+			}
+		}
+		
+		unit<uint32> Trips_x_order:= unique(AllStopTimes/Ordinal_x_Trip) 
+		{
+			attribute<Trips> trip_rel: expr = "pointRow(Values)[Trips]";
+			attribute<uint32> ord:     expr = "pointCol(Values)";
+		}
+		
+		unit<uint32> AllStopTimes:	expr = "LoadCsvs/Stop_times/refdomain", KeepData = "True", FreeData = "False", ExplicitSuppliers = "LoadCsvs/Stop_times/dataLink" {
+			attribute<Trips>		TripRef:		expr = "rlookup(LoadCsvs/Stop_times/dataLink/trip_id, Trips/trip_id)";
+			attribute<bool>			SelToday:		expr = "Trips/sel_today[TripRef]";
+			attribute<bool>			SelYesterday:	expr = "Trips/sel_yesterday[TripRef]";
+			attribute<protoStops>	pStopRef:		expr = "rlookup(LoadCsvs/Stop_times/dataLink/stop_id, protoStops/stop_id)";
+			attribute<Stops>		StopRef: 		expr = "rlookup(LoadCsvs/Stop_times/dataLink/stop_id, Stops/stop_id)";
+			attribute<uint32>		Ordinal:		expr = "uint32(LoadCsvs/Stop_times/dataLink/stop_sequence)"; 
+			attribute<upoint>       Ordinal_x_Trip:	expr = "point(TripRef, Ordinal, upoint)";
+			attribute<Trips_x_order>txo_rel:       	expr = "rlookup(Ordinal_x_Trip, Trips_x_order/Values)";
+			attribute<uint32>       ordered_ord:	expr = "txo_rel - Trips/first_txo[TripRef]";
+			attribute<upoint>       ThisStopUni:	expr = "point(TripRef, ordered_ord, upoint)";
+			attribute<upoint>       NextStopUni:	expr = "point(TripRef, ordered_ord+1, upoint)";
+			attribute<AllStopTimes> NextStopId:		expr = "rlookup(NextStopUni, ThisStopUni)";
+			attribute<CoordSys> 	FromPoint: 		expr = "Stops/point[StopRef]";
+			attribute<CoordSys>	 	NextPoint:		expr = "Stops/point[StopRef[NextStopId]]";
+			attribute<bool>			EndPoint:		expr = "IsNull(NextStopId)";
+			
+			container departureTime: 	expr = "getTimes(AllStopTimes, 	LoadCsvs/Stop_times/dataLink/departure_time)";
+			container arrivalTime: 		expr = "getTimes(AllStopTimes,	LoadCsvs/Stop_times/dataLink/arrival_time)";
+			
+			container Yesterday {
+				unit<uint32> Links: expr = "subset(SelYesterday && !EndPoint)" {
+					attribute<CoordSys> FromPoint: 			expr = "AllStopTimes/FromPoint[Nr_OrgEntity]";
+					attribute<CoordSys> ToPoint:			expr = "AllStopTimes/NextPoint[Nr_OrgEntity]";
+					attribute<CoordSys>	Line (arc):			expr = "points2sequence(GenLines/Points,GenLines/Seq,GenLines/Ord)";
+					attribute<Trips>	TripRef:			expr = "AllStopTimes/TripRef[Nr_OrgEntity]";
+					attribute<Stops> 	fromStop:			expr = "AllStopTimes/StopRef[Nr_OrgEntity]";
+					attribute<Stops>	toStop:				expr = "AllStopTimes/StopRef[NextStopId[Nr_OrgEntity]]";
+					attribute<Time> 	depTime: 			expr = "departureTime/TimesVector/TimeRef[Nr_OrgEntity]";
+					attribute<Time> 	arrTime: 			expr = "arrivalTime/TimesVector/TimeRef[NextStopId[Nr_OrgEntity]]";
+					attribute<uint32>	Order:				expr = "ordered_ord[Nr_OrgEntity]";
+					attribute<upoint>	uni_id:				expr = "point(TripRef, Order, upoint)";
+				}
+				unit<uint32> GenLines: 	expr = "union_unit(Links, Links)" {
+					attribute<CoordSys> 		Points:		expr = "union_data(., Links/FromPoint, Links/ToPoint)";
+					attribute<Links>			Seq:		expr = "union_data(., id(Links), id(Links))";
+					attribute<uint32> 			Ord:		expr = "union_data(., const(0,Links,uint32), const(1,Links,uint32))";
+				}
+			}
+			container Today  {
+				unit<uint32> Links: expr = "subset(SelToday && !EndPoint)" {
+					attribute<CoordSys> FromPoint: 			expr = "AllStopTimes/FromPoint[Nr_OrgEntity]";
+					attribute<CoordSys> ToPoint:			expr = "AllStopTimes/NextPoint[Nr_OrgEntity]";
+					attribute<CoordSys>	Line (arc):			expr = "points2sequence(GenLines/Points,GenLines/Seq,GenLines/Ord)";
+					attribute<Trips>	TripRef:			expr = "AllStopTimes/TripRef[Nr_OrgEntity]";
+					attribute<Stops> 	fromStop:			expr = "AllStopTimes/StopRef[Nr_OrgEntity]";
+					attribute<Stops>	toStop:				expr = "AllStopTimes/StopRef[NextStopId[Nr_OrgEntity]]";
+					attribute<Time> 	depTime: 			expr = "departureTime/TimesVector/TimeRef[Nr_OrgEntity]";
+					attribute<Time> 	arrTime: 			expr = "arrivalTime/TimesVector/TimeRef[NextStopId[Nr_OrgEntity]]";
+					attribute<uint32>	Order:				expr = "ordered_ord[Nr_OrgEntity]";
+					attribute<upoint>	uni_id:				expr = "point(TripRef, Order, upoint)";
+				}
+				unit<uint32> GenLines: 	expr = "union_unit(Links, Links)" {
+					attribute<CoordSys> 		Points:		expr = "union_data(., Links/FromPoint, Links/ToPoint)";
+					attribute<Links>			Seq:		expr = "union_data(., id(Links), id(Links))";
+					attribute<uint32> 			Ord:		expr = "union_data(., const(0,Links,uint32), const(1,Links,uint32))";
+				}
+			}
+		}
+		Template GetScheduledFrequencyLinks {
+			unit<uint32> inLinks;
+			unit<uint32> inTrips;
+			parameter<uint32> TimeModifier;
+			
+			unit<uint32> FrequencyTrips: 	expr = "inTrips"		{
+				attribute<Trips>	TripRef: 			expr = "Nr_OrgEntity";
+				attribute<uint32> 	nTripStarts:		expr = "Trips/nTripStarts[Nr_OrgEntity]";
+				attribute<Time>		Regime_start:		expr = "Trips/Regime_start[Nr_OrgEntity]";
+				attribute<Time>		Regime_end:			expr = "Trips/Regime_end[Nr_OrgEntity]";
+				attribute<uint32>	cumu_tripstarts:	expr = "cumulate(nTripStarts) - nTripStarts";
+			}
+			unit<uint32> FrequencyTripStarts:		expr = "range(uint32, 0, sum(FrequencyTrips/nTripStarts))" {
+				attribute<FrequencyTrips> 	proto_ft_Ref: 	expr = "rlookup(id(.), FrequencyTrips/cumu_tripstarts)";
+				attribute<FrequencyTrips> 	ft_Ref:			expr = "cumulate(uint32(IsDefined(proto_ft_Ref)))-1";
+				attribute<Trips>			TripRef:		expr = "FrequencyTrips/TripRef[ft_Ref]";
+				attribute<uint32>			Trip_ord:		expr = "cumulate(const(1,.,uint32), TripRef)-1";
+				attribute<upoint>			uni_id:			expr = "point(TripRef, Trip_ord, upoint)";
+				attribute<AllTripStarts>	ats_Ref:		expr = "rlookup(uni_id, AllTripStarts/uni_id)";
+				attribute<Time>				Move_Start:		expr = "AllTripStarts/Move_Start[ats_Ref]";
+				attribute<uint32>			nLinks:			expr = "pcount(inLinks/TripRef)[TripRef]";
+				attribute<uint32>			cumu_links:		expr = "cumulate(nLinks)-nLinks";
+			}
+			unit<uint32> FrequencyLinks:			expr = "range(uint32, 0, sum(FrequencyTripStarts/nLinks))" {
+				attribute<FrequencyTripStarts> 	proto_fts_Ref: 		expr = "rlookup(id(.), FrequencyTripStarts/cumu_links)";
+				attribute<FrequencyTripStarts> 	fts_Ref:			expr = "cumulate(uint32(IsDefined(proto_fts_Ref)))-1";
+				attribute<Trips>				TripRef:			expr = "FrequencyTripStarts/TripRef[fts_Ref]";
+				attribute<uint32>				Link_Ord:			expr = "cumulate(const(1,.,uint32),fts_Ref)-1";
+				attribute<upoint>				uni_id:				expr = "point(TripRef, Link_Ord, upoint)";
+				attribute<inLinks>				LinkRef:			expr = "rlookup(uni_id, inLinks/uni_id)";
+				attribute<CoordSys>				Line (arc):			expr = "inLinks/Line[LinkRef]";
+				attribute<Stops> 				fromStop:			expr = "inLinks/fromStop[LinkRef]";
+				attribute<Stops> 				toStop:				expr = "inLinks/toStop[LinkRef]";
+				attribute<Time>					Move_start:			expr = "FrequencyTripStarts/Move_Start[fts_ref]";
+				attribute<Time>					FirstDepTime:		expr = "min(inLinks/depTime, inLinks/TripRef)[TripRef]";
+				attribute<Time>					p_depTime:			expr = "inLinks/depTime[LinkRef] - FirstDepTime";
+				attribute<Time>					p_arrTime:			expr = "inLinks/arrTime[LinkRef] - FirstDepTime";
+				attribute<Time>					depTime:			expr = "(Move_start + p_depTime < #Time ? Move_start + p_depTime : (Move_start + p_depTime) - #Time) - TimeModifier[Time]";
+				attribute<Time>					arrTime:			expr = "(Move_start + p_arrTime < #Time ? Move_start + p_arrTime : (Move_start + p_arrTime) - #Time) - TimeModifier[Time]";
+			}
+			
+		}
+		
+	}
+	Template getTimes {
+		unit<uint32> inVector;
+		attribute<string> TimesString (inVector);
+		
+		unit<uint32> TimesVector: expr = "inVector" {
+			attribute<uint32>		hour_sep:	expr = "strpos(TimesString, ':')";
+			attribute<uint32>		sec_sep:	expr = "strrpos(TimesString, ':')";
+			attribute<uint32> 		hour:		expr = "uint32(substr(TimesString, 0, hour_sep))";
+			attribute<uint32>		min:		expr = "uint32(substr(TimesString, hour_sep + 1, sec_sep - hour_sep - 1))";
+			attribute<uint32>		sec:		expr = "uint32(substr(TimesString, sec_sep + 1, 2))";
+			attribute<uint32>		hoursyst:	expr = "makedefined(sub_or_null(hour, max(Time/Hour)), hour)";
+			attribute<Time>			TimeRef:	expr = "((hoursyst * 60 * 60) + (min * 60) + sec)[Time]";
+		}
+	}
+	
+}

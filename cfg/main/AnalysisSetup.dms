@@ -1,0 +1,87 @@
+/**********************************************************************************************************************************
+GTFS routing configuration
+Developed by Chris Jacobs-Crisioni, 2019, 2020
+European Commission, Joint Research Centre, Territorial Development Unit, LUISA team
+
+All code free to use, share and adapt under CC BY-SA 3.0 licensing conditions
+For further information please contact chris.jacobs-crisioni@ec.europa.eu
+***********************************************************************************************************************************/
+
+
+
+container AnalysesConfiguration: Using = "Definitions;DataManagement;" {
+	
+	container Parameters {
+		parameter<km> 		MaxODDistKm: 				expr = "1.0[km]"; // max euclidean distance (km)
+		parameter<km>		MaxTransferDistKm:			expr = "0.5[km]";
+		parameter<uint32>  	MinODconn:					expr = "15";
+		parameter<Time>    	OD_Time:					expr = "#Time + 1";
+		parameter<km_hr>	WalkingSpeed:				expr = "4.5[km_hr]";
+		parameter<km_hr> 	TransferEffectiveSpeed: 	expr = "(WalkingSpeed[float32] / 1.2[float32])[km_hr]"; // expressed in kilometers per hour, modified for manhattan distances
+		parameter<km>		Regio_maxkms:				expr = "8.0[km]";
+		parameter<min_f> 	Regio_maxmins:				expr = "30[min_f]";
+		parameter<float32>  HalfLife_median:			expr = "float32(30)";
+		parameter<float32>  exp_b:						expr = "log(0.5f) / HalfLife_median"; // half life method by Osth, with 30 minute median, see https://journals.open.tudelft.nl/ejtir/article/view/3142/3328
+	}
+	
+	// binds most settings together
+	unit<uint32> Analyses: expr = "combine(StudyAreas, ODResolutions)", Using = "DataManagement;" {
+		attribute<string> 				Name: 				expr = "StudyAreaName + '_' + ResolutionName";
+		attribute<string>				StudyAreaName:		expr = "StudyAreas/Name[nr_1]";
+		attribute<string>				ResolutionName:		expr = "ODResolutions/Name[nr_2]";
+//		attribute<float64>				MaxTransferDistKm:	expr = "StudyAreas/MaxTransferDistKm[nr_1]";
+		attribute<string>				netTemplate:		expr = "AvailableRoadNetworks/Type[StudyAreas/WalkingRoad_Def[nr_1]]+'_'+RoadNetworkGeneration/Name[ODResolutions/RN_def[nr_2]]";
+		attribute<ODMatrixDefinition> 	odTemplate:			expr = "ODResolutions/OD_def[nr_2]";
+		attribute<string>				date_prefix: 		expr = "StudyAreas/Date_Prefix[nr_1]";
+	}
+	
+	//resolutions in which o/d zones are available
+	unit<uint32> ODResolutions: nrOfRows = 4 {
+		attribute<string> 					name: 	expr = "'m'+string(val_m)";
+		attribute<uint32> 					val_m:	[100, 200, 500, 1000];
+		attribute<RoadNetworkGeneration>    RN_def:	[0, 0, 0, 0];
+		attribute<ODMatrixDefinition>		OD_def: [1, 1, 1, 1];
+	}
+	
+	// the code here is used to setup the temporal resolution of the analysis. 
+	container TimeSampling {
+
+		parameter<string>	SamplingStrategy:			expr = "'H'"; // or 'S', or 'R', or 'One'
+		parameter<uint32> 	SamplingResolution:			expr = "4";
+		parameter<string>   OneTime:					expr = "'08:00:00'"; 
+		
+		// sample approaches obtained from Stepniak et al (2019) The impact of temporal resolution on public transport accessibility measurement: Review and case study in Poland. J Tr G 75: 8 - 24
+		unit<uint32> SampleDay: expr = "subset(Time/Day = 0)" {
+			attribute<uint32> Random:			expr = "rnd_uniform(0,.,range(uint32,1,#SampleDay))";
+			attribute<Hours>  Hour:				expr = "rlookup(Time/Hour[Nr_OrgEntity], uint32(Hours/Hour))";
+			attribute<uint32> Minute:			expr = "Time/Minute[Nr_OrgEntity]";
+			attribute<bool>	  R_sample:			expr = "Random < sum(Hours/nSamples)";
+			attribute<bool>   S_sample:			expr = "IsDefined(invert(StructuredSamples/S)[Nr_OrgEntity])";
+			attribute<bool>	  H_sample:			expr = "IsDefined(invert(StructuredSamples/H)[Nr_OrgEntity])";
+			attribute<bool>	  One_sample:		expr = "LabelText = OneTime";
+			//W Sample: random walk sample currently not implemented, iterative mechanism rather complicated...
+			
+			attribute<string> LabelText:		expr = "Time/LabelText[Nr_OrgEntity]", DialogType = "LabelText";
+			attribute<string> TemplatableText: 	expr = "Time/TemplatableText[Nr_OrgEntity]";
+			
+			unit<uint32> StructuredSamples: expr = "range(uint32, 0, sum(Hours/nSamples))" {
+				attribute<Hours> 	SampleH:= classify(id(.), Hours/cumu_samples)+1[Hours];
+				attribute<uint32>	Cumul_SampleH:= cumulate(const(1,.,uint32), SampleH) - 1;
+				attribute<Time>		S: 	expr = "(SampleH * 60 * 60) + (60 * (Cumul_SampleH * (60 / Hours/nSamples[SampleH])))";
+				attribute<Time> 	H:	expr = "S + (rnd_uniform(0,.,range(uint32, 0, (60 / SamplingResolution))) * 60)";
+			}
+			unit<uint32> SampleHours: NrOfRows = 4 {attribute<Hours> def: [2,7,10,22];}
+			unit<uint32> Hours: NrOfRows = 24 {
+				attribute<Hours> Hour:				expr = "id(.)";
+				attribute<uint32> nSamples:			expr = "IsDefined(rlookup(Hour, SampleHours/def)) ? SamplingResolution : 0";
+				attribute<uint32> SamplingMinFrame:	expr = "MakeDefined(60 / nSamples, 0)"; 
+				attribute<uint32> cumu_samples:		expr = "cumulate(nSamples)";
+				attribute<string> LabelText:		expr = "string(Hour) + 'h'", DialogType = "LabelText";
+			}
+		}
+		unit<uint32> MeasureMoments: expr = "= 'subset(SampleDay/'+SamplingStrategy+'_sample)'" {
+			attribute<Time> 	Moment: expr = "SampleDay/Nr_OrgEntity[Nr_OrgEntity]";
+			attribute<string> 	Name:	expr = "Time/TemplatableText[Moment]";
+		}
+	}
+}

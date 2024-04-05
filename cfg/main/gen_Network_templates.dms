@@ -1,0 +1,307 @@
+/**********************************************************************************************************************************
+GTFS routing configuration
+Developed by Chris Jacobs-Crisioni, 2019, 2020
+European Commission, Joint Research Centre, Territorial Development Unit, LUISA team
+
+All code free to use, share and adapt under CC BY-SA 3.0 licensing conditions
+For further information please contact chris.jacobs-crisioni@ec.europa.eu
+***********************************************************************************************************************************/
+
+container gen_Network_templates: Using = "Definitions;" {
+	
+	Template StaticNetsCreator {
+		parameter<uint32> inAnalysis;
+		unit<uint32> inStops;
+		unit<uint32> inLinks;
+		unit<uint32> inODSet;
+		
+		parameter<uint32> inStudyArea: expr = "AnalysesConfiguration/Analyses/nr_1[inAnalysis]";
+		
+		unit<uint32> MeasureMoments: expr = "AnalysesConfiguration/TimeSampling/MeasureMoments";
+		
+		// Links should later depend on trips active according to calendar!!!
+		unit<uint32> Stops:			expr = "inStops" {
+			attribute<Time> FirstEvent:	expr = "min(ScheduledSpaceTimeEvents/TimeRef, ScheduledSpaceTimeEvents/StopRef)";
+			attribute<Time> LastEvent:	expr = "max(ScheduledSpaceTimeEvents/TimeRef, ScheduledSpaceTimeEvents/StopRef)";
+			attribute<uint32> TotalScheduledEvents: expr = "pcount(ScheduledSpaceTimeEvents/StopRef)";
+			attribute<AllPlaces> PlaceRef: expr = "rlookup(point, AllPlaces/Values)";
+		}
+		unit<uint32> ODs:						expr = "inODSet" {
+			attribute<string>				Name:			expr = "'z'+string(id(.))";
+			attribute<AllPlaces> 			PlaceRef:		expr = "rlookup(geometry, AllPlaces/Values)";
+			attribute<static_Net/NodeSet>	NodeId:			expr = "rlookup(point(PlaceRef, const(parameters/OD_Time,.,Time), upoint), static_Net/NodeSet/Values)";
+			
+			unit<uint32> Cartesian_product: expr = "combine(ODs, ODs)" {
+				attribute<upoint>	uni_id:		 expr = "point(OrgZone_rel, DstZone_Rel, upoint)";
+				attribute<ODs> 		OrgZone_rel: expr = "nr_1";
+				attribute<ODs>		DstZone_rel: expr = "nr_2";
+				attribute<Time>		Duration:	 expr = "const(#Time,.,Time)";
+				attribute<float32>	Distance:	 expr = "const(-1,.,float32)";
+			}
+		}
+		unit<uint32> AllPlaces:					expr = "allLinks/Places";
+		unit<uint32> AllTimes:					expr = "allLinks/UniqueTimeEvents";
+		unit<uint32> OD_walk_matrix: 			expr = "= IsDefined(DataManagement/StudyAreas/WalkingRoad_Def[inStudyArea]) ? 'RoadNets/'+ AnalysesConfiguration/Analyses/Name[inAnalysis] +'/Network/ZoneToZoneMatrix' : 'ODs/Cartesian_product'";
+		unit<uint32> ScheduledLinks:			expr = "inLinks" {
+			attribute<ScheduledSpaceTimeEvents> from_sot: expr = "rlookup(point(fromStop, depTime, upoint), ScheduledSpaceTimeEvents/Values)";
+			attribute<ScheduledSpaceTimeEvents> to_sot:	expr = "rlookup(point(toStop, arrTime, upoint), ScheduledSpaceTimeEvents/Values)";
+			attribute<uint32> 					Duration:	expr = "depTime < arrTime ? arrTime - depTime : (arrTime + #Time) - depTime";
+			attribute<string>					LabelText:	expr = "'Scheduled: ' + Time/LabelText[depTime] + ' @ ' + Stops/Name[fromStop] + ' to ' + Time/LabelText[arrTime] + ' @ ' + Stops/Name[toStop]", DialogType = "LabelText";
+			unit<uint32> findUniqueSpaceTimeEvents: expr = "union_unit(ScheduledLinks, ScheduledLinks)" {
+				attribute<upoint> timesOfStop: 	expr = "union_data(., point(ScheduledLinks/fromStop, ScheduledLinks/depTime), point(ScheduledLinks/toStop, ScheduledLinks/arrTime))";
+				attribute<Time>   TimeRef:			expr = "pointCol(timesOfStop)";
+			}
+		}
+		unit<uint32> ScheduledTimeEvents:			expr = "unique(ScheduledLinks/findUniqueSpaceTimeEvents/TimeRef)";
+		unit<uint32> ScheduledSpaceTimeEvents: 		expr = "unique(ScheduledLinks/findUniqueSpaceTimeEvents/TimesOfStop)" {
+			attribute<Stops> 	StopRef: 			expr = "pointRow(Values)[Stops]";
+			attribute<Time>    	TimeRef: 			expr = "pointCol(Values)[Time]";
+			attribute<uint32> 	ODconnects:			expr = "pcount(CreateODconnections/ODPaths/From)[StopRef]";
+			attribute<string> 	LabelText:			expr = "Stops/Name[StopRef] + ' @ ' + Time/LabelText[TimeRef]";
+			attribute<.>		FirstMoment:		expr = "min_index(TimeRef, StopRef)[StopRef]";
+			attribute<.>		NextMoment:			expr = "StopRef[id(.)+1] = StopRef ? id(.) + 1 : FirstMoment";
+			attribute<bool>  	points_unsorted: 	expr = "Values != sort(Values)"; // check to verify Values are orderd ascendingly (documented as such in online documentation)
+			attribute<uint32>	cumu_events_Stop:	expr = "cumulate(const(1,.,uint32), StopRef) - 1";
+			attribute<upoint>	unique_id:			expr = "point(StopRef, cumu_events_Stop, upoint)";
+			attribute<upoint>	time_search_id:		expr = "point(StopRef * #Time + 1, TimeRef, upoint)";
+		}
+		
+		container CreateTransfersSet {
+			
+			unit<uint32> TransferFromStops: expr = "subset(inStops/nTransfers > 0)", DialogData = "point", DialogType = "map" {
+				attribute<CoordSys>  point:				expr = "inStops/point[Nr_OrgEntity]";
+				attribute<uint32>	 nTransfers: 		expr = "inStops/nTransfers[Nr_OrgEntity]";
+				attribute<string> 	LabelText:			expr = "inStops/LabelText[Nr_OrgEntity]", DialogType = "LabelText";
+				attribute<StopsGrid>GridId:				expr = "inStops/GridId[Nr_OrgEntity]";
+				attribute<uint32>	Grid1D:				expr = "inStops/Grid1D[Nr_OrgEntity]";
+				attribute<uint32>  	cumu_in_grid:		expr = "inStops/cumu_in_grid[Nr_OrgEntity]";
+				attribute<upoint>	unique_id:			expr = "inStops/unique_id[Nr_OrgEntity]";
+				attribute<uint32> 	first_transfer:		expr = "cumulate(nTransfers) - nTransfers";
+				attribute<uint32>	nEvents:			expr = "pcount(ScheduledSpaceTimeEvents/StopRef)[Nr_OrgEntity]";
+			}
+			
+			unit<spoint> StopsGrid: expr = "inStops/StopsGrid";
+			
+			unit<uint32> Directions: NrOfRows = 5 {
+				attribute<string> LabelText: ['Top', 'Right', 'Bottom', 'Left', 'Centre'];
+				attribute<int16> row: [0,1,0,-1,0];
+				attribute<int16> col: [1,0,-1,0,0];
+				attribute<StopsGrid> point: expr = "point(col, row, StopsGrid)";
+			}
+			
+			unit<uint32> TransferPaths: expr = "range(uint32, 0, sum(TransferFromStops/nTransfers))", DialogData = "Line", DialogType = "map" {
+				attribute<TransferFromStops>  first_from_stop:		expr = "rlookup(id(.), TransferFromStops/first_transfer)";
+				attribute<TransferFromStops>  from_trans_StopRef:	expr = "cumulate(uint32(IsDefined(first_from_stop))) - 1";
+				attribute<inStops>  		  from_StopRef:			expr = "TransferFromStops/Nr_OrgEntity[from_trans_StopRef]";
+				attribute<uint32>			  nEvents:				expr = "pcount(ScheduledSpaceTimeEvents/StopRef)[from_StopRef]";
+				attribute<uint32>			  first_trans_event:	expr = "cumulate(nEvents) - nEvents";
+				attribute<upoint>			  from_unique_id:		expr = "inStops/unique_id[from_stopRef]";
+				attribute<StopsGrid>		  from_GridId:			expr = "inStops/GridId[from_StopRef]";
+				attribute<uint32>			  from_Grid1d:			expr = "StopsGrid/uniId[from_GridId]";
+				attribute<uint32>			  nTop:					expr = "StopsGrid/nTop[from_GridId]";
+				attribute<uint32>			  nRight:				expr = "StopsGrid/nRight[from_GridId]";
+				attribute<uint32>			  nBottom:				expr = "StopsGrid/nBottom[from_GridId]";
+				attribute<uint32>			  nLeft:				expr = "StopsGrid/nLeft[from_GridId]";
+				attribute<uint32>			  first_trans:			expr = "TransferFromStops/first_transfer[from_trans_StopRef]";
+				attribute<Directions>		  quad:					expr = "switch(" //top, right, bottom, left, middle
+					"case(nTop > 0   	&& nTop    > makedefined(sub_or_null(id(.), first_trans), 0), uint32(0)), "
+					"case(nRight > 0 	&& nRight  > makedefined(sub_or_null(id(.), (first_trans + nTop)), 0), uint32(1)), "
+					"case(nBottom > 0 	&& nBottom > makedefined(sub_or_null(id(.), (first_trans + nRight + nTop)), 0), uint32(2)), "
+					"case(nLeft > 0 	&& nLeft   > makedefined(sub_or_null(id(.), (first_trans + nBottom + nRight + nTop)), 0), uint32(3)), "
+					"4)[Directions]";
+				attribute<StopsGrid>		  to_GridId:			expr = "(from_GridId+Directions/point[quad])";
+				attribute<uint32>			  to_Grid1d:			expr = "StopsGrid/uniId[to_GridId]";
+				attribute<upoint>			  to_unique_id:			expr = "point(to_Grid1d, seq2, upoint)";
+				attribute<inStops>			  to_StopRef:			expr = "rlookup(to_unique_id, inStops/unique_id)";
+					
+				attribute<uint32>			  seq1:					expr = "id(.) - switch(case(quad = 0, first_trans), case(quad = 1, first_trans + nTop), case(quad = 2, first_trans + nTop + nRight), case(quad = 3, first_trans + nTop + nRight + nBottom), first_trans + nTop + nRight + nBottom + nLeft)";
+				attribute<uint32>			  seq2:					expr = "quad = 4 && seq1 >= inStops/cumu_in_grid[from_StopRef] ? seq1 + 1 : seq1";
+				
+				attribute<string>			  LabelText:			expr = "'Transfer from ' + inStops/LabelText[from_StopRef] + ' to ' + inStops/LabelText[to_StopRef]";
+				attribute<CoordSys>			  Line (arc):			expr = "points2sequence(GenLines/Points,GenLines/Seq,GenLines/Ord)";
+				attribute<km>			      Distance:				expr = "arc_length(Line, m)[km]";
+				attribute<Time>				  minTransferTime:		expr = "MakeDefined((RoundUp((Distance / parameters/TransferEffectiveSpeed)[s_f]))[Time], 1[Time])";
+				
+				unit<uint32> GenLines: 		expr = "union_unit(TransferPaths, TransferPaths)" {
+					attribute<CoordSys> 		Points: expr = "union_data(., inStops/point[from_StopRef], inStops/point[to_StopRef])";
+					attribute<TransferPaths> 	Seq:	expr = "union_data(., id(TransferPaths), id(TransferPaths))";
+					attribute<uint32> 			Ord:	expr = "union_data(., const(0,TransferPaths,uint32), const(1,TransferPaths,uint32))";
+				}
+			}
+			unit<uint32> TransfersByStart: expr = "range(uint32, 0, sum(TransferPaths/nEvents))", DialogData = "Line", DialogType = "map" {
+				attribute<TransferPaths>	 first_trans_path:		expr = "rlookup(id(.), TransferPaths/first_trans_event)";
+				attribute<TransferPaths>	 PathRef:				expr = "cumulate(uint32(IsDefined(first_trans_path))) - 1";
+				attribute<CoordSys>			 Line (arc):			expr = "TransferPaths/Line[PathRef]";
+				attribute<Stops>			 fromStop:				expr = "TransferPaths/from_StopRef[PathRef]";
+				attribute<Stops>			 toStop:				expr = "TransferPaths/to_StopRef[PathRef]";
+				attribute<uint32>			 cumu_events:			expr = "cumulate(const(1,.,uint32), PathRef) - 1";
+				attribute<ScheduledSpaceTimeEvents> SSTE_Ref:		expr = "rlookup(point(fromStop, cumu_events, upoint), ScheduledSpaceTimeEvents/unique_id)";
+				attribute<Time>				 fromTime:				expr = "ScheduledSpaceTimeEvents/TimeRef[SSTE_Ref]";
+				attribute<Time>				 Duration:				expr = "TransferPaths/minTransferTime[PathRef]";
+				attribute<Time>				 toTime:				expr = "fromTime + Duration < #Time ? fromTime + Duration : sub_or_null(fromTime + Duration, #Time)";
+				attribute<string>			 LabelText:				expr = "'Transfer: ' + Time/LabelText[fromTime] + ' @ ' + Stops/Name[fromStop] + ' to ' + Time/LabelText[toTime] + ' @ ' + Stops/Name[toStop]", DialogType = "LabelText";
+			}
+		}
+		
+		container CreateODconnections {
+			//Code implemented by Maarten Hilferink and Jip Claassen, ObjectVision, to fix persistent performance issues
+			unit<uint32> OD_path : expr = "= 'NetworkCreation/RoadNets/'+AnalysesConfiguration/Analyses/Name[inAnalysis]+'/Network/RoadODPaths'";
+			
+			attribute<OD_Path>                  OD_index (OD_Path)                    := index(OD_path/stopRef); 
+			attribute<ScheduledSpaceTimeEvents> time_index (ScheduledSpaceTimeEvents) := index(ScheduledSpaceTimeEvents/stopRef);
+			
+			attribute<UInt32> Count_paths_to_stop  (stops) := pcount(OD_path/stopRef);
+			attribute<UInt32> Count_times_per_stop (stops) := pcount(ScheduledSpaceTimeEvents/StopRef);
+			
+			attribute<UInt32> nr_PathsBefore       (stops) := cumulate(Count_paths_to_stop) - Count_paths_to_stop;			
+			attribute<UInt32> nr_TimesBefore       (stops) := cumulate(Count_times_per_stop) - Count_times_per_stop;
+			
+			attribute<UInt32> nr_Joins             (stops) := Count_paths_to_stop * Count_times_per_stop;
+			attribute<UInt32> nr_JoinsBefore       (stops) := cumulate(nr_Joins) - nr_Joins;
+			
+			unit<uint32> ODPathsByStart := range(UInt32, 0, sum(nr_Joins)) {
+				attribute<UInt32>                     Stop_Ord          := id(.) - nr_JoinsBefore[Stop_rel];
+				
+				attribute<ODs>                        ZoneRef           := OD_path/ODRef[OD_rel];
+				attribute<Stops>                      Stop_rel          := classify(uint32(id(.)), uint32(nr_JoinsBefore));
+				attribute<allLinks/Places>            Place_rel         := stops/PlaceRef[Stop_rel];
+				attribute<OD_path>                    OD_rel            := OD_index[value(stop_ord / Count_times_per_stop[Stop_rel] + nr_PathsBefore[Stop_rel], OD_path)];
+				attribute<ScheduledSpaceTimeEvents>   SSTE_rel          := time_index[value(stop_ord % Count_times_per_stop[Stop_rel] + nr_TimesBefore[Stop_rel], ScheduledSpaceTimeEvents)];
+				attribute<CoordSys>                   Line (arc)        := OD_path/Line[OD_rel];
+				
+				attribute<Time>                       Duration          := OD_path/minWalkingTime[OD_rel];
+				
+				attribute<Time>                       Stop_Time 	    := ScheduledSpaceTimeEvents/TimeRef[SSTE_rel];
+				attribute<Time>                       FromOD_Time       := Stop_Time[int32] - Duration[int32] > 0i ? Stop_Time - Duration : (Stop_Time + #Time) - Duration;
+				attribute<Time>                       ToOD_Time         := Stop_Time + Duration < #Time ? Stop_Time + Duration : sub_or_null(Stop_Time + Duration, #Time);
+				attribute<string>                     FromStop_LabelText:= 'Walk from stop ' + Stops/Name[Stop_rel] + ' @ '+Time/LabelText[Stop_Time]+' to destination ' + ODs/Name[ZoneRef] + ' @ '+Time/LabelText[ToOD_Time], DialogType = "LabelText";
+				attribute<string>                     ToStop_LabelText  := 'Walk from origin ' + ODs/Name[ZoneRef] + ' @ '+Time/LabelText[FromOD_Time]+' to destination ' + Stops/Name[Stop_rel] + ' @ '+Time/LabelText[Stop_Time], DialogType = "LabelText";
+				
+				attribute<upoint>                     PlacexMoment   	 := point(Place_rel, Stop_Time,  upoint);
+				attribute<allLinks/NodeSet>           NodeRef      		 := rlookup(PlacexMoment, allLinks/NodeSet/values);
+			}
+		}
+		
+		unit<uint32> allLinks: expr = "union_unit(ScheduledLinks, CreateTransfersSet/TransfersByStart, CreateODconnections/ODpathsByStart)", DialogData = "Line", DialogType = "map", FreeData = "False", KeepData = "True" {
+			attribute<CoordSys> Line (arc): expr = "union_data(., ScheduledLinks/Line, CreateTransfersSet/TransfersByStart/Line, CreateODconnections/ODpathsByStart/Line)";
+			attribute<Time> 	fromTime: 	expr = "union_data(., ScheduledLinks/depTime, CreateTransfersSet/TransfersByStart/fromTime, CreateODconnections/ODpathsByStart/Stop_Time)";
+			attribute<Time> 	toTime: 	expr = "union_data(., ScheduledLinks/arrTime, CreateTransfersSet/TransfersByStart/toTime, CreateODconnections/ODpathsByStart/ToOD_Time)";
+			attribute<uint32> 	Duration:	expr = "union_data(., ScheduledLinks/Duration, CreateTransfersSet/TransfersByStart/Duration, CreateODconnections/ODpathsByStart/Duration)";
+			attribute<string>	LabelText:	expr = "union_data(., ScheduledLinks/LabelText, CreateTransfersSet/TransfersByStart/LabelText, CreateODconnections/ODpathsByStart/FromStop_LabelText)", DialogType = "LabelText";
+			attribute<LinkTypes>LinkType:	expr = "union_data(., const(LinkTypes/Values/Scheduled,ScheduledLinks,LinkTypes), const(LinkTypes/Values/Transfer,CreateTransfersSet/TransfersByStart,LinkTypes), const(LinkTypes/Values/Stop_to_OD,CreateODconnections/ODpathsByStart,LinkTypes))";
+			attribute<CoordSys> fromPoint:	expr = "first_node(Line)";
+			attribute<CoordSys> toPoint:	expr = "last_node(Line)";
+			attribute<Places>	FromPlace:	expr = "rlookup(fromPoint, Places/Values)";
+			attribute<Places>	ToPlace:	expr = "rlookup(toPoint, Places/Values)";
+			
+			unit<uint32> doubledLinks: expr = "union_unit(allLinks, allLinks)" {
+				attribute<Time> 	Moment: 		expr = "union_data(., fromTime, toTime)";
+				attribute<CoordSys> Coords: 		expr = "union_data(., fromPoint, toPoint)";
+				attribute<Stops> 	StopRef:		expr = "rlookup(Coords, Stops/point)";
+				attribute<Places>	Place:			expr = "rlookup(Coords, Places/Values)";
+				attribute<upoint>	PlacexMoment:	expr = "point(Place, Moment, upoint)";
+				attribute<upoint> 	StopxMoment: 	expr = "point(StopRef, Moment, upoint)";
+			}
+			unit<uint32> Places:			expr = "unique(doubledLinks/Coords)", DialogData = "Values", DialogType = "map" {
+				attribute<uint32>	ODRef:	 	expr = "rlookup(Values, ODs/point)";
+				attribute<uint32> 	StopRef:	expr = "rlookup(Values, Stops/point)";
+				attribute<string>	LabelText: 	expr = "MakeDefined('OD: '+ODs/Name[ODRef], 'Stop: '+Stops/Name[StopRef])", DialogData = "LabelText";
+			}
+			unit<uint32> UniqueTimeEvents: 	expr = "unique(doubledLinks/Moment)";
+			unit<uint32> UniqueStopXMoment: expr = "unique(doubledLinks/StopxMoment)" {
+				attribute<Stops> 	StopRef: 			expr = "pointRow(Values)[Stops]";
+				attribute<Time>    	TimeRef: 			expr = "pointCol(Values)[Time]";
+				attribute<string> 	LabelText:			expr = "Stops/Name[StopRef] + ' @ ' + Time/LabelText[TimeRef]";
+				attribute<.>		FirstMoment:		expr = "min_index(TimeRef, StopRef)[StopRef]";
+				attribute<.>		NextMoment:			expr = "StopRef[id(.)+1] = StopRef ? id(.) + 1 : FirstMoment";
+				attribute<bool>  	points_unsorted: 	expr = "Values != sort(Values)"; // check to verify Values are orderd ascendingly (documented as such in online documentation)
+				
+				unit<uint32>	MakeWaitingLines:		expr = "union_unit(UniqueStopXMoment, UniqueStopXMoment)" {
+					attribute<CoordSys> 				point:			expr = "union_data(., Stops/point[StopRef], Stops/point[StopRef])";
+					attribute<UniqueStopXMoment>		Seq:			expr = "union_data(., id(UniqueStopXMoment), id(UniqueStopXMoment))";
+					attribute<uint32>					Ord:			expr = "union_data(., const(0,UniqueStopXMoment,uint32), const(1,UniqueStopXMoment,uint32))";
+				}
+			}
+			unit<uint32> WaitingAtStop: 		expr = "UniqueStopXMoment" {
+				attribute<CoordSys>		line (arc): expr = "points2sequence(UniqueStopXMoment/MakeWaitingLines/point, UniqueStopXMoment/MakeWaitingLines/Seq, UniqueStopXMoment/MakeWaitingLines/Ord)";
+				attribute<Stops>		FromStop:	expr = "StopRef";
+				attribute<Stops>  		ToStop:		expr = "StopRef[NextMoment]";
+				attribute<AllPlaces>	FromPlace:	expr = "Stops/PlaceRef[FromStop]";
+				attribute<AllPlaces>	ToPlace:	expr = "Stops/PlaceRef[ToStop]";
+				attribute<Time>			FromTime:	expr = "TimeRef";
+				attribute<Time> 		ToTime:		expr = "TimeRef[NextMoment]";
+				attribute<Time> 		Duration:	expr = "FromTime < ToTime ? ToTime - FromTime : (ToTime + #Time) - FromTime"; // duration in seconds
+				attribute<string>		LabelText:	expr = "'Waiting at stop: ' + Stops/Name[FromStop] + ' from ' + Time/LabelText[FromTime] + ' to ' + Time/LabelText[ToTime]", DialogType = "LabelText";
+			}
+			unit<uint32> NodeSet: expr = "unique(doubledLinks/PlacexMoment)", DialogData = "Place", DialogType = "map" {
+				attribute<AllPlaces>PlaceRef:	expr = "pointRow(Values)";
+				attribute<Time>		TimeRef:	expr = "pointCol(Values)";
+				attribute<CoordSys> Place: 		expr = "AllPlaces/Values[PlaceRef]";
+			}
+		}
+		
+		unit<uint32> Static_Net: expr = "union_unit(allLinks, allLinks/WaitingAtStop)", DialogData = "Line", DialogType = "Map", FreeData = "False" {
+			attribute<CoordSys> 	Line (arc): expr = "union_data(., allLinks/line, allLinks/WaitingAtStop/line)";
+			attribute<AllPlaces>	FromPlace:	expr = "union_data(., allLinks/FromPlace, allLinks/WaitingAtStop/FromPlace)";
+			attribute<AllPlaces>	ToPlace:	expr = "union_data(., allLinks/ToPlace, allLinks/WaitingAtStop/ToPlace)";
+			attribute<string> 		LabelText:	expr = "union_data(., allLinks/LabelText, allLinks/WaitingAtStop/LabelText)";
+			attribute<Time>			FromTime:	expr = "union_data(., allLinks/fromTime, allLinks/WaitingAtStop/fromTime)";
+			attribute<Time>			ToTime:		expr = "union_data(., allLinks/toTime, allLinks/WaitingAtStop/toTime)";
+			attribute<uint32> 		Duration:	expr = "union_data(., allLinks/Duration, allLinks/WaitingAtStop/Duration)";
+			attribute<LinkTypes>	LinkType:	expr = "union_data(., allLinks/LinkType, const(LinkTypes/Values/Waiting_at_Stop,allLinks/WaitingAtStop,LinkTypes))";
+			attribute<NodeSet>		F1:			expr = "rlookup(point(FromPlace, FromTime), NodeSet/Values)";
+			attribute<NodeSet>		F2:			expr = "rlookup(point(ToPlace, ToTime), NodeSet/Values)";
+			
+			attribute<uint32> LinkTypeSum (LinkTypes): expr = "pcount(LinkType)";
+			unit<uint32> NodeSet: 	expr = "allLinks/NodeSet", FreeData = "False";
+			unit<uint32> NetCheck: 	expr = "connected_parts(F1, F2)";
+		}
+		
+		Template genTransfersByTime {
+			parameter<Stops> OriginStop;
+			
+			unit<uint32> Times:		expr = "subset(ScheduledSpaceTimeEvents/StopRef = OriginStop)" {
+				attribute<Time>    	TimeRef: 			expr = "ScheduledSpaceTimeEvents/TimeRef[Nr_OrgEntity]";
+			}
+			unit<uint32> Transfers: expr = "subset(TransferPaths/From = OriginStop)" {
+				attribute<Stops>  	from: 				expr = "const(OriginStop,.,Stops)";
+				attribute<Stops> 	to:					expr = "TransferPaths/to[Nr_OrgEntity]";
+				attribute<CoordSys>	Line (arc):			expr = "TransferPaths/Line[Nr_OrgEntity]";
+				attribute<float64>	Distance:			expr = "TransferPaths/Distance[Nr_OrgEntity]";	
+				attribute<Time>		minTransferTime:	expr = "TransferPaths/minTransferTime[Nr_OrgEntity]";
+			}
+			unit<uint32> TransfersByTime: 	expr = "combine(Times, Transfers)" {
+				attribute<CoordSys>	Line (arc):			expr = "Transfers/Line[nr_2]";
+				attribute<Stops> 	fromStop:			expr = "Transfers/from[nr_2]"; 			
+				attribute<Stops> 	toStop:				expr = "Transfers/to[nr_2]"; 		
+				attribute<Time> 	fromTime:			expr = "Times/TimeRef[nr_1]";
+				attribute<Time>		Duration:			expr = "Transfers/minTransferTime[nr_2]";
+				attribute<Time>		toTime:				expr = "fromTime + Duration < #Time ? fromTime + Duration : fromTime + Duration -  #Time";
+			}
+		}
+		Template genODPathsByTime {
+			parameter<Stops> OriginStop;
+			
+			unit<uint32> Times:		expr = "subset(ScheduledSpaceTimeEvents/StopRef = OriginStop)" {
+				attribute<Time>    	TimeRef: 			expr = "ScheduledSpaceTimeEvents/TimeRef[Nr_OrgEntity]";
+			}
+			unit<uint32> Paths: expr = "subset(ODPaths/From = OriginStop)" {
+				attribute<Stops>  	from: 				expr = "const(OriginStop,.,Stops)";
+				attribute<ODs> 		to:					expr = "ODPaths/to[Nr_OrgEntity]";
+				attribute<CoordSys>	Line (arc):			expr = "ODPaths/Line[Nr_OrgEntity]";
+				attribute<float64>	Distance:			expr = "ODPaths/Distance[Nr_OrgEntity]";	
+				attribute<Time>		minWalkingTime:	expr = "ODPaths/minWalkingTime[Nr_OrgEntity]";
+			}
+			unit<uint32> ODPathsByTime: 	expr = "combine(Times, Paths)" {
+				attribute<CoordSys>	Line (arc):			expr = "Paths/Line[nr_2]";
+				attribute<Stops> 	fromStop:			expr = "Paths/from[nr_2]"; 			
+				attribute<ODs> 		to:					expr = "Paths/to[nr_2]"; 		
+				attribute<Time> 	fromTime:			expr = "Times/TimeRef[nr_1]";
+				attribute<Time>		Duration:			expr = "Paths/minWalkingTime[nr_2]";
+				attribute<Time>		toTime:				expr = "fromTime + Duration < #Time ? fromTime + Duration : fromTime + Duration -  #Time";
+			}
+		}
+	}
+	
+	 
+}

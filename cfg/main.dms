@@ -1,0 +1,125 @@
+/**********************************************************************************************************************************
+GTFS routing configuration
+Developed by Chris Jacobs-Crisioni, 2019, 2020
+European Commission, Joint Research Centre, Territorial Development Unit, LUISA team
+
+All code free to use, share and adapt under CC BY-SA 3.0 licensing conditions
+For further information please contact chris.jacobs-crisioni@ec.europa.eu
+***********************************************************************************************************************************/
+
+container GTFS_routing {
+	
+	container Definitions {
+		unit<dpoint> WGS84 : SpatialReference = "EPSG:4326", DialogData = "wms_layer_latlong"
+		{
+			parameter<float32> ViewPortMinSize := 5f / 3600f;
+			parameter<float32> PenWorldWidth   := 0.01f / 3600f, DialogType = "PenWorldWidth";
+			parameter<float32> LabelWorldSize  := 5f / 3600f, DialogType = "LabelWorldSize";
+			parameter<float32> SymbolWorldSize := 1f / 3600f, DialogType = "SymbolWorldSize";
+		}
+		unit<dpoint> WebMercator       : SpatialReference = "EPSG:3857",   DialogData = "tms_layer_osm_webmercator", Label = "WebMercator";
+		unit<dpoint> LambertEA: Descr = "LambertEA",	SpatialReference = "EPSG:3035",   DialogData = "ngr_layer_lea";//Descr = "Mollweide Global Projection",	Format = "ESRI:540009"; //
+		unit<dpoint> CoordSys:  expr = "LambertEA";//Descr = "Mollweide Global Projection",	Format = "EPSG:540009"; //
+		
+		unit<int32>   mm        := int32(0.001 * m);
+		unit<float64> m         := baseunit('meter', float64);
+		unit<float64> m2         := m * m;
+		unit<float64> km        := 1000f * m;
+		unit<uint32>  s         := baseunit('second', uint32);
+		unit<float64> s_f       := baseunit('second', float64);
+		unit<uint32>  min       := 60 * s, Descr = "Minutes";
+		unit<float64> min_f     := float64(60f * s_f);
+		unit<uint32>  hr        := 60 * min;
+		unit<float64> hr_f      := float64(60f * min);
+
+		unit<float64> m_s       := m  / s_f;
+		unit<float64> km_hr     := km / hr_f;
+		
+		#include <wms_layer_latlong.dms>
+		#include <tms_layer_osm_webmercator.dms>
+		#include <ngr_layer_lea.dms>
+		
+		unit<uint32> Weekdays: NrOfRows = 7 {
+			attribute<string> Name:   ['monday','tuesday','wednesday','thursday','friday','saturday','sunday'];
+			attribute<.>	  PrevRef: 		expr = "makedefined(sub_or_null(id(.), 1), 6)"; 
+			attribute<string> LabelText:	expr = "Name", DialogData = "LabelText";
+		}
+		unit<uint32> Time: 	   expr = "range(uint32, 0, (24*60*60)*2)" {
+			attribute<Time>   Internal:			expr = "id(Time)";
+			attribute<uint32> Day:				expr = "id(.) / (24*60*60)";
+			attribute<uint32> Hour: 			expr = "id(.) / (60*60)";
+			attribute<uint32> Minute: 			expr = "mod(id(.) / 60, 60)";
+			attribute<uint32> Second:			expr = "mod(id(.), 60)";
+			attribute<string> LabelText:		expr = "(Hour < 10 ? '0' : '') + string(Hour) + ':' + (Minute < 10 ? '0' : '') + string(Minute) + ':' + (Second < 10 ? '0' : '') + string(Second)", DialogType = "LabelText";
+			attribute<string> TemplatableText: 	expr = "'At_'+(Hour < 10 ? '0' : '') + string(Hour) + 'h' + (Minute < 10 ? '0' : '') + string(Minute) + 'm' + (Second < 10 ? '0' : '') + string(Second) + 's'";
+		}
+		container Geography {
+			unit<dpoint>  Base: Format     = "EPSG:4326" {
+				parameter<float32> ViewPortMinSize: expr = "float32(100)	/ float32(3600 * 4)";
+				parameter<float32> PenWorldWidth: 	expr = "float32(1) 		/ float32(3600 * 4)", 	DialogType = "PenWorldWidth";
+				parameter<float32> SymbolWorldSize: expr = "float32(2)	 	/ float32(3600)",	DialogType = "SymbolWorldSize";
+				parameter<float32> LabelWorldSize: 	expr = "float32(10) 	/ float32(3600)",	DialogType = "LabelWorldSize";
+			}
+
+			parameter<LambertEA> Origin: Expr = "point(1500000.0,  900000.0, LambertEA)"; // Left-Bottom coord
+			parameter<LambertEA> Extent: Expr = "point(6000000.0, 4530000.0, LambertEA)";
+
+			parameter<LambertEA> LeftBottom: Expr = "Origin";
+			parameter<LambertEA> LeftTop:    Expr = "point(pointcol(Origin), pointrow(Origin)+pointrow(Extent), LambertEA)";
+		}
+		unit<uint32> LinkTypes: NrOfRows = 7 {
+			attribute<string> 	Name: 		['Undefined','Scheduled','Transfer','Stop_to_OD','OD_to_Stop','Waiting_at_Stop','DirectWalking'];
+			attribute<float32>  SubjWeight: [1.0, 1.0, 1.84, 1.68, 1.68,  1.8, 1.68]; //Subjective travel time multipliers from Wardman et al (2014), table 5
+			attribute<string> 	LabelText: expr = "Name", DialogType = "LabelText";
+			attribute<uint32> 	PenColor:	 [rgb(128,128,128), rgb(200,0,0), rgb(129,129,0), rgb(0,0,128),rgb(0,0,255), rgb(128,128,128),rgb(0,0,64)], DialogType = "PenColor";
+			attribute<int16>  	PenStyle:	 [4,0,1,2,2,0,2], DialogType = "PenStyle";
+			container values: 	expr = "for_each_nedv(Name, string(id(LinkTypes)), void, LinkTypes)";
+		}
+		#include<Modes.dms>
+		unit<uint32> Modes: expr = "ModesList/List";
+		
+		//Roadnetwork types, used to select approach to generate od-connnections
+		unit<uint32> RoadNetworkGeneration: NrOfRows = 2 {
+			attribute<string> 	Name: 		['simple','extended'];
+			attribute<string> 	LabelText:  expr = "Name", DialogType = "LabelText";
+		}
+		//OD matrix types, used to select approach to generate od matrices.
+		unit<uint32> ODMatrixDefinition: NrOfRows = 2 {
+			attribute<string>  	Name: 		['simple','extended'];
+			attribute<string> 	LabelText:  expr = "Name", DialogType = "LabelText";
+		}
+	}
+	#include<DataManagement.dms>
+	#include<AnalysisSetup.dms>
+	container NetworkCreation: Using = "DataManagement;Definitions;AnalysesConfiguration;" {
+		container LoadFeeds: 		expr = "for_each_ne(AvailableFeeds/Name, 'load_GTFS_templates/LoadGTFSfiles_'+AvailableFeeds/Type+'('+string(id(AvailableFeeds))+')')" {
+			//attribute<bool> StoreAllFeeds (AvailableFeeds): expr = "= 'union_data(AvailableFeeds, '+AsItemList(AvailableFeeds/Name+'/StoreFSS/StoreAll')+')'";
+		}
+		#include<Load_Roads.dms>
+		#include<OD_set_generation.dms>
+		container StudyAreaFeeds: 	expr = "for_each_ne(StudyAreas/Name, 'load_GTFS_templates/FeedsPerStudyAreaCombiner('+string(id(StudyAreas))+')')";
+		
+		container RoadNets:= for_each_ne(Analyses/Name, 
+			'road_Network_templates/createNetwork_'+Analyses/netTemplate+
+			'('+string(StudyAreas/WalkingRoad_Def[Analyses/nr_1])+', 
+				StudyAreaFeeds/'+Analyses/StudyAreaName+'/Stops
+				, StudyAreaPreparation/OD_sets/'+Analyses/StudyAreaName+'/OD_points/'+Analyses/ResolutionName+'/pts
+				, StudyAreaPreparation/OD_sets/'+Analyses/StudyAreaName+'
+				, StudyAreaFeeds/'+Analyses/StudyAreaName+'/export/filepaths
+				, '+quote(Analyses/ResolutionName)+')');
+		
+		container StaticNets: 		expr = "for_each_ne(Analyses/Name, 'gen_Network_templates/StaticNetsCreator('+string(id(Analyses))+', StudyAreaFeeds/'+Analyses/StudyAreaName+'/Stops'+"
+			"', StudyAreaFeeds/'+Analyses/StudyAreaName+'/Links, StudyAreaPreparation/OD_sets/'+Analyses/StudyAreaName+'/OD_points/'+Analyses/ResolutionName+'/pts)')";
+	}
+	container Analyses:		expr = "for_each_ne(AnalysesConfiguration/Analyses/Name, "
+		"'do_Analysis_templates/GetStudyAreaResults(StaticNets/'+AnalysesConfiguration/Analyses/Name+','+quote(AnalysesConfiguration/Analyses/Name)+','+quote(AnalysesConfiguration/Analyses/Date_prefix)+')')", Using = "NetworkCreation;AnalysesConfiguration/TimeSampling;";
+	
+	#include<rough_analyses.dms>
+	
+	#include<do_Analysis_templates.dms>
+	#include<gen_Network_templates.dms>
+	#include<load_GTFS_templates.dms>
+	#include<road_Network_templates.dms>
+	#include<Templates.dms>
+	
+}

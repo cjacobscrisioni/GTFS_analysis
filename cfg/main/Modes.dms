@@ -1,0 +1,106 @@
+/**********************************************************************************************************************************
+GTFS routing configuration
+Developed by Chris Jacobs-Crisioni, 2019, 2020
+European Commission, Joint Research Centre, Territorial Development Unit, LUISA team
+
+All code free to use, share and adapt under CC BY-SA 3.0 licensing conditions
+For further information please contact chris.jacobs-crisioni@ec.europa.eu
+***********************************************************************************************************************************/
+
+Container ModesList {
+	unit<uint32> List: NrOfRows = 84 {
+		
+		// combines official modes list, as defined in the GTFS format, with the extended mode list, as eg used in the Vilnius feed. 
+		// For more information on the extended mode list see https://developers.google.com/transit/gtfs/reference/extended-route-types
+		attribute<uint32> ModeNr: 		expr = "uint32(Matrix/Values[((id(.)*2)+0)[Matrix]])";
+		attribute<string> Name:	  		expr = "string(Matrix/Values[((id(.)*2)+1)[Matrix]])";
+		attribute<string> LabelText:	expr = "Name", DialogType = "LabelText";
+		unit<uint32> Matrix: NrOfRows = 168 {
+			attribute<string> Values: [
+			'0',	'Tram',
+			'1',	'Metro',
+			'2',	'Rail',
+			'3',	'Bus',
+			'4',	'Ferry',
+			'5',	'CableTram',
+			'6',	'AerialLift',
+			'7',	'Funicular',
+			'100',	'Railway_Service',
+			'101',	'High_Speed_Rail_Service',
+			'102',	'Long_Distance_Trains',
+			'103',	'Inter_Regional_Rail_Service',
+			'104',	'Car_Transport_Rail_Service',
+			'105',	'Sleeper_Rail_Service',
+			'106',	'Regional_Rail_Service',
+			'107',	'Tourist_Railway_Service',
+			'108',	'Rail_Shuttle_(Within_Complex)',
+			'109',	'Suburban_Railway',
+			'110',	'Replacement_Rail_Service',
+			'111',	'Special_Rail_Service',
+			'112',	'Lorry_Transport_Rail_Service',
+			'113',	'All_Rail_Services',
+			'114',	'Cross-Country_Rail_Service',
+			'115',	'Vehicle_Transport_Rail_Service',
+			'116',	'Rack_and_Pinion_Railway',
+			'117',	'Additional_Rail_Service',
+			'200',	'Coach_Service',
+			'201',	'International_Coach_Service',
+			'202',	'National_Coach_Service',
+			'203',	'Shuttle_Coach_Service',
+			'204',	'Regional_Coach_Service',
+			'205',	'Special_Coach_Service',
+			'206',	'Sightseeing_Coach_Service',
+			'207',	'Tourist_Coach_Service',
+			'208',	'Commuter_Coach_Service',
+			'209',	'All_Coach_Services',
+			'400',	'Urban_Railway_Service',
+			'401',	'Metro_Service',
+			'402',	'Underground_Service',
+			'403',	'Urban_Railway_Service',
+			'404',	'All_Urban_Railway_Services',
+			'405',	'Monorail',
+			'700',	'Bus_Service',
+			'701',	'Regional_Bus_Service',
+			'702',	'Express_Bus_Service',
+			'703',	'Stopping_Bus_Service',
+			'704',	'Local_Bus_Service',
+			'705',	'Night_Bus_Service',
+			'706',	'Post_Bus_Service',
+			'707',	'Special_Needs_Bus',
+			'708',	'Mobility_Bus_Service',
+			'709',	'Mobility_Bus_for_Registered_Disabled',
+			'710',	'Sightseeing_Bus',
+			'711',	'Shuttle_Bus',
+			'712',	'School_Bus',
+			'713',	'School_and_Public_Service_Bus',
+			'714',	'Rail_Replacement_Bus_Service',
+			'715',	'Demand_and_Response_Bus_Service',
+			'716',	'All_Bus_Services',
+			'717',	'Share_Taxi_Service',
+			'800',	'Trolleybus_Service',
+			'900',	'Tram_Service',
+			'901',	'City_Tram_Service',
+			'902',	'Local_Tram_Service',
+			'903',	'Regional_Tram_Service',
+			'904',	'Sightseeing_Tram_Service',
+			'905',	'Shuttle_Tram_Service',
+			'906',	'All_Tram_Services',
+			'907',	'Cable_Tram',
+			'1000',	'Water_Transport_Service',
+			'1100',	'Air_Service',
+			'1200',	'Ferry_Service',
+			'1300',	'Aerial_Lift_Service',
+			'1400',	'Funicular_Service',
+			'1500',	'Taxi_Service',
+			'1501',	'Communal_Taxi_Service',
+			'1502',	'Water_Taxi_Service',
+			'1503',	'Rail_Taxi_Service',
+			'1504',	'Bike_Taxi_Service',
+			'1505',	'Licensed_Taxi_Service',
+			'1506',	'Private_Hire_Service_Vehicle',
+			'1507',	'All_Taxi_Services',
+			'1700',	'Miscellaneous_Service'];
+		}
+	}
+
+}

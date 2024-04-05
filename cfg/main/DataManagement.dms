@@ -1,0 +1,164 @@
+/**********************************************************************************************************************************
+GTFS routing configuration
+Developed by Chris Jacobs-Crisioni, 2019, 2020
+European Commission, Joint Research Centre, Territorial Development Unit, LUISA team
+
+All code free to use, share and adapt under CC BY-SA 3.0 licensing conditions
+For further information please contact chris.jacobs-crisioni@ec.europa.eu
+***********************************************************************************************************************************/
+
+Container DataManagement: using = "Definitions;" {
+	//All GTFS file structures
+	// *** NEEDS TO BE ADJUSTED IN CASE ADDITIONAL STUDY AREAS ARE DEFINED ***
+	// *** DON'T FORGET TO CHANGE NrOfRows ***
+	unit<uint32> AvailableFeeds: NrOfRows = 32 {
+		attribute<string> 		Name:= 				inMatrix/values[((id(.)*6)+0)[inMatrix]]; 
+		attribute<string> 		Type:= 				inMatrix/values[((id(.)*6)+1)[inMatrix]]; 
+		attribute<Weekdays> 	Today:= 	value(	inMatrix/values[((id(.)*6)+2)[inMatrix]], Weekdays); 
+		attribute<Weekdays> 	Yesterday:= value(	inMatrix/values[((id(.)*6)+3)[inMatrix]], Weekdays); 
+		attribute<string>		Date:=				inMatrix/values[((id(.)*6)+4)[inMatrix]];
+		attribute<string>		PrevDate:=			inMatrix/values[((id(.)*6)+5)[inMatrix]];
+		attribute<string>		Date_prefix:				expr = "substr(Date, 0, 4) + '/' + substr(Date, 4, 2) + '/' +  substr(Date, 6, 2) + ' '";
+		attribute<string> 		LabelText: expr = "Name", DialogData = "LabelText";
+		
+		
+		unit<uint32> inMatrix:= range(uint32, 0, #AvailableFeeds * 6) {
+			
+			//structure: Name, Type
+			//Name: also name of folder in which GTFS files are located
+			//Type: specification of feed (frequencies or not)
+			//Today: daycode of day of analysis (0 = Monday)
+			//Yesterday: daycode of day previous to analysis (0 = Monday)
+			//Date: Code of date of analysis (YYYYMMDD)
+			//Prevdate: code of date previous to analysis (YYYYMMDD)
+			
+			//Name, Type, Today, Yesterday, Date, Prevdate
+			attribute<string> values: [
+				'Vilnius_2018','Vilnius','1','0','20190205','20190204'
+				,'Lisbon_metro','LisbonMetro','1','0','20190205','20190204'
+				,'Lisbon_Carris','LisbonMetro','1','0','20190205','20190204'
+				,'Lisbon_CP','LisbonMetro','1','0','20190205','20190204'
+				,'Lisbon_Fertagus','Vilnius','1','0','20190205','20190204'
+				,'Lisbon_Transtejo','Vilnius','1','0','20190205','20190204'
+				,'Madrid_M4','LisbonMetro','1','0','20190205','20190204'
+				,'Madrid_M5','Vilnius','1','0','20190205','20190204'
+				,'Madrid_M6','Vilnius','1','0','20190205','20190204'
+				,'Madrid_M10','Vilnius','1','0','20190205','20190204'
+				,'OvGTFS','Vilnius','1','0','20171006','20171005'
+				,'Athens_oasa_2017','Vilnius','1','0','20170418','20170417'
+				,'Athens_trainose_2018','Vilnius','1','0','20180220','20180219'
+				,'Roma','Vilnius','1','0','20180220','20180219'
+				,'Ljubljana','Vilnius','1','0','20180508','20180507'
+				,'Praha','Vilnius','1','0','20180220','20180219'
+				,'Riga','Vilnius','1','0','20190205','20190204'
+				,'Sardegna_ARST','Vilnius','1','0','20220701','20220630'
+				,'Sardegna_ASPO_Olbia','Vilnius','1','0','20220701','20220630'
+				,'Sardegna_ATP_Nuoro','Vilnius','1','0','20220701','20220630'
+				,'Sardegna_ATP_Sassari','Vilnius','1','0','20220701','20220630'
+				,'Sardegna_CTM_Cagliari','Vilnius','1','0','20220701','20220630'
+				,'Sardegna_privati','Vilnius','1','0','20220701','20220630'
+				,'Sardegna_traghetti','Vilnius','1','0','20220701','20220630'
+				,'Sardegna_trenitalia','Vilnius','1','0','20220701','20220630'
+				,'Estonia','Vilnius','2','1','20230906','20230905'
+				,'SK_ZSR','Vilnius','1','0','20230207','20230206'
+				,'OvGTFS_202307','Vilnius','1','0','20230913','20230912'
+				,'OvGTFS_202402','Vilnius','1','0','20240221','20240221'
+				,'Vilnius_2024','Vilnius','1','0','20240206','20240205'
+				,'Visimarsrutai_2024','Vilnius','1','0','20240312','20240311'
+				,'Vienna_2024','Vilnius','1','0','20240206','20240205'
+			];
+		}
+	}
+	//All road networks available in source data folder
+	// *** NEEDS TO BE ADJUSTED IN CASE ADDITIONAL STUDY AREAS ARE DEFINED ***
+	// *** DON'T FORGET TO CHANGE NrOfRows ***
+	unit<uint32> AvailableRoadNetworks: expr = "StudyAreas" {
+		attribute<string> Name: expr = "substr(StudyAreas/Name, 0, strlen(StudyAreas/Name)-3) + '_walk_network_25km'";
+		attribute<string> Type:	expr = "const('fss',.,string)";
+		attribute<string> Label: expr = "Name", DialogType = "DialogText";
+	}
+	//All study areas
+	// *** NEEDS TO BE ADJUSTED IN CASE ADDITIONAL STUDY AREAS ARE DEFINED ***
+	// *** WALKING ROAD REFERS TO NAME OF AVAILABLE ROAD NETWORKS ***
+	unit<uint32> StudyAreas: NrOfRows = 23 {
+		parameter<uint32> NrAttributes: expr = "2";
+		unit<uint32> inMatrix: expr = "range(uint32, 0, #StudyAreas * NrAttributes)" {
+			attribute<string> values: [
+				//Study area, FUA_coverage
+				'Vilnius_LT','LT001C'	
+				,'Lisbon_PT', 'PT001C'	
+				,'Madrid_ES', 'ES001C'
+				,'Amsterdam_NL', 'NL001F'
+				,'Athens_GR', 'GR001C'
+				,'Roma_IT', 'IT001C'
+				,'Ljubljana_SI', 'SI001C'
+				,'Zagreb_HR', 'HR001C'
+				,'Paris_FR', 'FR001C'
+				,'Vienna_AT', 'AT001C'
+				,'Budapest_HU', 'HU001C'
+				,'Praha_CZ', 'CZ001C'
+				,'Warsaw_PL', 'PL001C'
+				,'Berlin_DE', 'DE001C'
+				,'Luxembourg_LU', 'LU001F'
+				,'Brussels_BE', 'BE001C'
+				,'Copenhagen_DK', 'DK001C'
+				,'Stockholm_SE', 'SE001C'
+				,'Helsinki_FI', 'FI001C'
+				,'Riga_LV', 'LV001C'
+				,'Sardegna_IT', ''
+				,'Estonia', ''
+				,'Slovakia', ''
+			];
+		}
+		attribute<string> 					Name: 				expr = "inMatrix/values[((id(.)*NrAttributes)+0)[inMatrix]]";
+		attribute<AvailableRoadNetworks> 	WalkingRoad_Def:	expr = "id(.)";
+		attribute<string> 					StudyArea_Def: 		expr = "inMatrix/values[((id(.)*NrAttributes)+1)[inMatrix]]";
+		attribute<string> 					LabelText: 			expr = "Name", DialogData = "LabelText";
+		attribute<float64> 					MaxTransferDistKm: 	expr = "Name = 'Amsterdam_NL' ? float64(0.1) : float64(0.5)"; // max euclidean distance (km)
+		attribute<string>					date_prefix: 		expr = "first(FeedsPerStudyArea/date_prefix, FeedsPerStudyArea/Area_id)";
+	}
+	//Crosses study areas with feeds to combine all feeds for a specific study area
+	// *** NEEDS TO BE ADJUSTED IN CASE NEW STUDY AREAS ARE ADDED ***
+	// *** DON'T FORGET TO CHANGE NrOfRows ***
+	unit<uint32> FeedsPerStudyArea: NrOfRows = 28 {
+		attribute<string>			Area_name:= inMatrix/values[((id(.)*2)+0)[inMatrix]]; 
+		attribute<string>			Feed_name:= inMatrix/values[((id(.)*2)+1)[inMatrix]]; 
+		attribute<StudyAreas> 		Area_id:= rlookup(Area_name, StudyAreas/Name);
+		attribute<AvailableFeeds>	Feed_id:= rlookup(Feed_name, AvailableFeeds/Name);
+		attribute<string>			date_prefix: expr = "AvailableFeeds/Date_Prefix[Feed_id]";
+		
+		unit<uint32> inMatrix:= range(uint32, 0, #FeedsPerStudyArea * 2) {
+			attribute<string> values: [
+				'Vilnius_LT','Visimarsrutai_2024'
+				//'Vilnius_LT','Vilnius_2024'
+				,'Vienna_AT','Vienna_2024'
+				,'Lisbon_PT','Lisbon_metro'
+				,'Lisbon_PT','Lisbon_Carris'
+				,'Lisbon_PT','Lisbon_CP'
+				,'Lisbon_PT','Lisbon_Fertagus'
+				,'Lisbon_PT','Lisbon_Transtejo'
+				,'Madrid_ES','Madrid_M4'
+				,'Madrid_ES','Madrid_M5'
+				,'Madrid_ES','Madrid_M6'
+				,'Madrid_ES','Madrid_M10'
+				,'Amsterdam_NL','OvGTFS_202402'
+				,'Athens_GR','Athens_oasa_2017'
+				,'Athens_GR','Athens_trainose_2018'
+				,'Roma_IT','Roma'
+				,'Ljubljana_SI','Ljubljana'
+				,'Praha_CZ','Praha'
+				,'Riga_LV','Riga'
+				,'Sardegna_IT','Sardegna_ARST'
+				,'Sardegna_IT','Sardegna_ASPO_Olbia'
+				,'Sardegna_IT','Sardegna_ATP_Nuoro'
+				,'Sardegna_IT','Sardegna_ATP_Sassari'
+				,'Sardegna_IT','Sardegna_CTM_Cagliari'
+				,'Sardegna_IT','Sardegna_privati'
+				,'Sardegna_IT','Sardegna_traghetti'
+				,'Sardegna_IT','Sardegna_trenitalia'
+				,'Estonia','Estonia'
+				,'Slovakia','SK_ZSR'
+			];
+		}
+	}
+}

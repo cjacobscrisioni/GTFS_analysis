@@ -1,0 +1,667 @@
+/**********************************************************************************************************************************
+GTFS routing configuration
+Developed by Chris Jacobs-Crisioni, 2019, 2020
+European Commission, Joint Research Centre, Territorial Development Unit, LUISA team
+
+All code free to use, share and adapt under CC BY-SA 3.0 licensing conditions
+For further information please contact chris.jacobs-crisioni@ec.europa.eu
+***********************************************************************************************************************************/
+
+container road_Network_Templates: Using = "DataManagement;" {
+	
+	Template createNetwork_fss_simple {
+		
+		parameter<uint32> placeholder:= 0;
+		unit<uint32> inStops;
+		unit<uint32> inODs;
+		container StudyArea;
+		parameter<string> path: 		expr = "'%LocalDataProjDir%/export/odpaths'";
+		parameter<string> resolution:	expr = "'custom'";
+		parameter<uint8>  NumberOfItersForNetworkCleanUp:= 10b;
+		
+		parameter<string> setname:= propvalue(., 'Name');
+		
+		container NetwerkSpec {
+			unit<uint32> points: expr = "union_unit(inStops, inODs)", DialogData = "point", DialogType = "map" {
+				attribute<CoordSys> geometry: expr = "union_data(., inStops/point, inODs/geometry)";
+				attribute<bool>		isOD:  expr = "union_data(., const(False,inStops,bool), const(True,inODs,bool))";
+				attribute<bool>		isStop:expr = "!isOD";
+				attribute<uint32>	OrgRef:expr = "union_data(., id(inStops), id(inODs))";
+			}
+			unit<uint32> uq_OD_points:= unique(points/geometry)  {attribute<CoordSys> Geometry:= Values;}
+			unit<uint32> Find_subnetworks:= arc2segm(StudyArea/Load_study_area_lines/Geometry) {
+				attribute<CoordSys> Geometry (arc):= points2sequence( PointSet/points , convert(id( PointSet ) % # . , . ));
+				attribute<NodeSet> F1:= rlookup(point, NodeSet/Values);
+				attribute<NodeSet> F2:= rlookup(nextpoint, NodeSet/Values);
+				attribute<bool> biggest:= NetCheck/PartNr[F1] = max_index(NetCheck/Size);
+				
+				unit<uint32> pointset:= union_unit(Find_subnetworks, Find_subnetworks) {attribute<CoordSys> points:= union_data(., point, nextpoint);}
+				unit<uint32> NodeSet:= unique(pointset/points)  {attribute<CoordSys> Geometry:= Values;}
+				
+				unit<uint32> NetCheck: 	expr = "connected_parts(F1, F2)" {attribute<uint32> size:= pcount(partnr);}
+			}
+			unit<uint32> Biggest_subnetwork:= select_with_org_rel(Find_subnetworks/biggest) {
+				attribute<CoordSys> Geometry (arc):= org_rel->Geometry;
+			}
+			unit<uint32> Net_with_stops:= connect(Biggest_subnetwork/Geometry, inStops/point, AnalysesConfiguration/Parameters/MaxODDistKm[m]^2d) {
+				attribute<bool> IsOD_connection_road:= isnull(arc_rel);
+			}
+			unit<uint32> Net_with_stops_and_ODs:= connect(Net_with_stops/Geometry, inODs/geometry) {
+				attribute<bool> IsOD_connection_road:= isdefined(arc_rel) ? arc_rel->IsOD_connection_road : True;
+			}
+		}
+		// add speeds info from DEMS about here (work in progress)
+		unit<uint32> Connected_net:= NetwerkSpec/Net_with_stops_and_ODs {
+			attribute<CoordSys> Geometry (arc):= NetwerkSpec/Net_with_stops_and_ODs/Geometry;
+			attribute<bool> IsOD_connection_road:= NetwerkSpec/Net_with_stops_and_ODs/IsOD_connection_road;
+			attribute<CoordSys> point:= first_point(Geometry);
+			attribute<CoordSys> nextpoint:= last_point(Geometry);
+			attribute<km> Length:= arc_length(Geometry, m)[km];
+			attribute<km_hr> Speed:= const(AnalysesConfiguration/Parameters/WalkingSpeed,.,km_hr);
+			attribute<s_f> Impedance:= (Length / Speed)[s_f];
+			attribute<bool> IsOneDirection:= const(False,.,bool);
+			attribute<Connected_net_NodeSet> F1:= rlookup(point, Connected_net_NodeSet/Values);
+			attribute<Connected_net_NodeSet> F2:= rlookup(nextpoint, Connected_net_NodeSet/Values);
+			
+			unit<uint32> pointset:= union_unit(Connected_net, Connected_net) {attribute<CoordSys> points:= union_data(., point, nextpoint);}
+		}
+		unit<uint32> Connected_net_NodeSet:= unique(Connected_net/pointset/points) {attribute<CoordSys> Geometry:= Values;}
+		
+		container CreateMoreEfficientNetwork
+		{
+			unit<uint8> Iter := range(uint8, 0[uint8], NumberOfItersForNetworkCleanUp)
+			{
+				attribute<string> name := 'Iter_'+string(id(.));
+				attribute<string> prevname := MakeDefined(name[sub_or_null(ID(.),1b)], 'Start');
+				attribute<string> Label := name, DialogType = "LabelText";
+				attribute<uint32> nrofarc_na_iter := ='union_data(., '+AsList('OptimiseNetwork/'+name+'/IntermediateLinkSet/count_arcs', ',')+')'; 
+			}
+			
+			unit<uint32> LinkSet_src     := Connected_net;
+			unit<uint32> NodeSet_src     := Connected_net_NodeSet;
+
+			unit<uint64> Nodeset_x_NodeSet := combine_unit_uint64(NodeSet_src, NodeSet_src);
+			
+			container OptimiseNetwork := 
+				for_each_ne(
+					Iter/name
+					, 'OptimiseNetwork_T('+quote(Iter/name)+')'
+				)
+			{
+				container LastIter := =last(Iter/name);
+			}
+			unit<uint32> LastLinkSet  := OptimiseNetwork/LastIter/IntermediateLinkSet;
+			
+			// hardstore optimised network and nodeset
+			unit<uint32> FinalNodeSet_Write := select_with_org_rel(pcount(LastLinkSet/F1)+pcount(LastLinkSet/F2) > 0),	StorageName = "= '%LocalDataProjDir%/studyarea_roads/fss/'+StudyArea/setname+'/Optimised_Nodeset_'+setname+'.fss'" 
+			{
+				attribute<CoordSys>        	  geometry                  := org_rel->values;
+				attribute<.>                  Stop_rel  (inStops)  	:= rlookup(inStops/point,  geometry);
+				attribute<.>                  OD_rel 	(inODs) 	:= rlookup(inODs/geometry, geometry);	
+			}
+			unit<uint32> FinalLinkSet_Write := LastLinkSet,	StorageName = "= '%LocalDataProjDir%/studyarea_roads/fss/'+StudyArea/setname+'/Optimised_Linkset_'+setname+'.fss'" 
+			{
+				attribute<FinalNodeSet_Write> F1                   := invert(FinalNodeSet_Write/org_rel)[LastLinkSet/F1];
+				attribute<FinalNodeSet_Write> F2                   := invert(FinalNodeSet_Write/org_rel)[LastLinkSet/F2];
+				attribute<s_f>                Impedance            := LastLinkSet/Impedance;
+				attribute<km>                 Length             := LastLinkSet/Length;
+				attribute<bool>               IsOneDirection       := LastLinkSet/IsOneDirection;
+				attribute<bool>               IsOD_connection_road := LastLinkSet/IsOD_connection_road;
+			}
+			
+			// read stored nodeset and links
+			unit<uint32> FinalNodeSet_Read : storagename = "= propvalue(FinalNodeSet_Write, 'StorageName')", StorageReadOnly = "True"
+			{
+				attribute<CoordSys>   geometry; 
+				attribute<.>             Stop_rel  (inStops);
+				attribute<.>             OD_rel 	(inODs);
+				attribute<bool>			 OD_null (inODs):= isnull(OD_rel);
+			}
+			unit<uint32> FinalLinkSet_Read : StorageName = "= propvalue(FinalLinkSet_Write, 'StorageName')", StorageReadOnly = "True"
+			{
+				attribute<FinalNodeSet_Read>      F1;
+				attribute<FinalNodeSet_Read>      F2;
+				attribute<s_f>                    Impedance;
+				attribute<km>                     Length;
+				attribute<bool>                   IsOneDirection;
+				attribute<bool>                   IsOD_connection_road;
+				
+				// For visualisation
+				attribute<CoordSys>            FirstPoint                     := FinalNodeSet_Read/Geometry[F1];
+				attribute<CoordSys>            LastPoint                      := FinalNodeSet_Read/Geometry[F2];
+				attribute<CoordSys>            geometry (arc)                 := points2sequence(PointSet/Point, PointSet/SeqNr, PointSet/Ordinal);
+				unit<uint32> PointSet := union_unit(.,.)
+				{
+					attribute<CoordSys>              Point   := Union_Data(., ../FirstPoint, ../LastPoint);
+					attribute<..>                       SeqNr   := value(id(.) % nrofrows(..), ..);
+					attribute<uint32>                   Ordinal := id(.) / nrofrows(..);
+				}
+				
+				unit<uint32> Without_OD_connection_roads := select_with_attr_by_org_rel(.,!IsOD_connection_road);
+			}
+		}
+		unit<uint32> Network:= CreateMoreEfficientNetwork/FinalLinkSet_Read {
+				
+			unit<uint32> NodeSet:= CreateMoreEfficientNetwork/FinalNodeSet_Read;
+			unit<uint32> connected_stops:= select_with_org_rel(isdefined(NodeSet/Stop_rel)) {
+				attribute<CoordSys> Geometry:= org_rel->point;
+				attribute<inStops>  OrgRef:= org_rel;
+			}
+			unit<uint32> points:= union_unit(inODs, connected_stops) {
+				attribute<CoordSys> Geometry:= union_data(., inODs/geometry, connected_stops/geometry);
+				attribute<bool> 	isOD:= union_data(., const(True,inODs,bool), const(False,connected_stops,bool));
+				attribute<bool> 	isStop:= union_data(., const(False,inODs,bool), const(True,connected_stops,bool));
+				attribute<uint32>   OrgRef:= union_data(., id(inODs)[uint32], connected_stops/OrgRef[uint32]);
+			}
+			
+			attribute<NodeSet>  org_node 	(inODs):= NodeSet/OD_rel;
+			attribute<NodeSet>	all_node	(points):= rlookup(points/geometry, 	NodeSet/geometry);
+			
+			//unit<uint32> ODMatrix: expr = "dijkstra_m('directed;startPoint(Node_rel);endPoint(Node_rel,impedance,DstZone_rel);limit(OrgZone_max_mass,DstZone_mass);od:impedance,OrgZone_rel,DstZone_rel,LinkSet',"
+			//	"float32(CurrentNetwork/Duration), CurrentNetwork/F1, CurrentNetwork/F2, ODs/OrgNode, CurrentNetwork/Destinations/NodeRef, CurrentNetwork/Destinations/Penalty, CurrentNetwork/Destinations/ODRef, float32(#ODs), float32(1))" {
+			unit<uint32> ODMatrix: expr = "dijkstra_m('bidirectional;startPoint(Node_rel);endPoint(Node_rel);alternative(link_imp):alt_imp;od:impedance,OrgZone_rel,DstZone_rel',"
+			 "Impedance, F1, F2, org_node, all_node, Length)" {
+				attribute<Time>	   Duration:			expr = "RoundUp(Impedance)[Time]";
+				attribute<min_f>   TotMinutes: 			expr = "Impedance[min_f]";
+				attribute<string>  From:				expr = "inODs/Name[OrgZone_rel]";
+				//attribute<string>  To:				expr = "ODs/Name[DstZone_rel]";
+				attribute<uint32>  nOrg (inODs):		expr = "pcount(OrgZone_rel)";
+				attribute<uint32>  nDest(points):		expr = "pcount(DstZone_rel)";
+				attribute<float64> d:					expr = "float64(alt_imp)";
+				attribute<float64> ad:					expr = "d + (float64(points/isOD[DstZone_Rel]) * float64(10000000))";
+				attribute<bool>    dist_sel:			expr = "d > float64(0) && d <= parameters/MaxODDistKm && points/isStop[DstZone_rel]";
+				attribute<bool>    stops_sel:			expr = "points/isStop[DstZone_rel] && ad > float64(0) && ad <= nth_element(ad, parameters/MinODconn, OrgZone_rel)[OrgZone_rel]";
+				attribute<uint32>  ndist_sel  (inODs):	expr = "sum(uint32(dist_sel), OrgZone_rel)";
+				attribute<bool>	   sel:					expr = "ndist_sel[OrgZone_rel] >= parameters/MinODconn ? dist_sel : stops_sel";
+				//attribute<bool>	   sel:					expr = "id(.) = 25";
+			}
+			unit<uint32> ZoneToZoneMatrix: expr = "subset(points/isOD[ODMatrix/DstZone_rel])" {
+				attribute<upoint>	uni_id:				expr = "point(OrgZone_rel, DstZone_Rel, upoint)";
+				attribute<inODs>	OrgZone_rel: 		expr = "ODMatrix/OrgZone_Rel[Nr_OrgEntity]";
+				attribute<inODs>	DstZone_rel:		expr = "points/OrgRef[ODMatrix/DstZone_Rel[Nr_OrgEntity]]";
+				attribute<Time> 	Duration:			expr = "ODMatrix/Duration[Nr_OrgEntity]";
+				attribute<LinkTypes>LinkType:			expr = "const(6,.,LinkTypes)";
+				attribute<float32>	SubjDuration:		expr = "float32(Duration) * LinkTypes/SubjWeight[LinkType]";
+				attribute<km> 	Distance:				expr = "ODMatrix/alt_imp[Nr_OrgEntity]";
+			}
+			
+			//  creates lines that indicate path from a to b. There is a check to ensure that first node and last node are matching, but there might be issues with inbetween links that are
+			// have issues with directionality causing loops. Only solution would be to reduce the entire shapefile to 
+			unit<uint32> Gen_RoadODPaths: expr = "subset(ODMatrix/sel)" {
+				attribute<inStops>  StopRef: 			expr = "points/OrgRef[ODMatrix/DstZone_rel[Nr_OrgEntity]]";
+				attribute<inODs> 	ODRef:				expr = "ODMatrix/OrgZone_Rel[Nr_OrgEntity]";
+				attribute<CoordSys>	OD_point:			expr = "inODs/geometry[ODRef]";
+				attribute<CoordSys>	Stop_point:			expr = "inStops/point[StopRef]";
+				attribute<bool> 	checkFrom:			expr = "first_node(line) = Stop_point";
+				attribute<bool> 	checkTo:			expr = "last_node(line) = OD_point";
+				attribute<CoordSys> toPoint:			expr = "last_node(line)";
+				attribute<CoordSys> fromPoint:			expr = "first_node(line)";
+				attribute<CoordSys>	Line (arc):			expr = "points2sequence(LinkPoints/Point, LinkPoints/ODPathRel, LinkPoints/CumulOrdinal)";
+				attribute<float64>	Distance:			expr = "ODMatrix/d[Nr_OrgEntity]";	
+				attribute<Time>		minWalkingTime:		expr = "ODMatrix/Duration[Nr_OrgEntity]";
+				
+				unit<uint32> LinkPoints: expr = "union_unit(Gen_RoadODPaths, Gen_RoadODPaths)", DialogData = "point", DialogType = "map" {
+					attribute<Gen_RoadODPaths> 	ODPathRel: 		expr = "union_data(., id(Gen_RoadODPaths), id(Gen_RoadODPaths))";
+					attribute<CoordSys>			point:			expr = "union_data(., Gen_RoadODPaths/Stop_point, Gen_RoadODPaths/OD_point)";
+					attribute<uint32>			CumulOrdinal:	expr = "union_data(., const(0,Gen_RoadODPaths,uint32), const(1,Gen_RoadODPaths,uint32))";
+				}
+			}
+			unit<uint32> Store_RoadODPaths:= Gen_RoadODPaths, storagename = "= '%LocalDataProjDir%/studyarea_roads/fss/'+StudyArea/setname+'/Road_OD_paths_'+setname+'.fss'" {
+				attribute<inStops>  StopRef:= Gen_RoadODPaths/StopRef;
+				attribute<inODs> 	ODRef:= Gen_RoadODPaths/ODRef;
+				attribute<CoordSys> line (arc):= Gen_RoadODPaths/line;
+				attribute<Time>		minWalkingTime:= Gen_RoadODPaths/minWalkingTime;
+			
+			}
+			unit<uint32> RoadODPaths: storagename = "= propvalue(Store_RoadODPaths, 'StorageName')", StorageReadOnly = "True" {
+				attribute<inStops>  StopRef;
+				attribute<inODs> 	ODRef;
+				attribute<CoordSys> line (arc);
+				attribute<Time>		minWalkingTime;
+				
+				attribute<uint32>	nConns (inODs): 	expr = "pcount(ODRef)";
+			}
+		}
+		Container ExportPaths: expr = "doExportPaths(Network/RoadODPaths, path + resolution)";
+	}
+	
+	// creates straight lines from origins to stops
+	Template createNetwork_osmnx_simple {
+		parameter<uint32> inNetwork;
+		unit<uint32> inStops;
+		unit<uint32> inODs;
+		unit<uint32> Lines: StorageName = "= '%DataDir%/_roadnetworks/'+AvailableRoadNetworks/Name[inNetwork]+'/edges/edges.shp'", StorageType = "gdal.vect", StorageReadOnly = "True", DialogData = "line", DialogType = "map" {
+			attribute<CoordSys> line (arc);
+			attribute<float32>  deg_len: expr = "float32(arc_length(line, float64))";
+		}
+		parameter<string> path: 		expr = "'%LocalDataProjDir%/export/odpaths'";
+		parameter<string> resolution:	expr = "'custom'";
+		unit<uint32> points: expr = "union_unit(inStops, inODs)", DialogData = "point", DialogType = "map" {
+			attribute<CoordSys> point: expr = "union_data(., inStops/point, inODs/point)";
+			attribute<bool>		isOD:  expr = "union_data(., const(False,inStops,bool), const(True,inODs,bool))";
+			attribute<bool>		isStop:expr = "!isOD";
+			attribute<uint32>	OrgRef:expr = "union_data(., id(inStops), id(inODs))";
+		}
+		unit<uint32> Network: expr = "connect(Lines/line, points/point)", DialogData = "Line", DialogType = "map" {
+			attribute<CoordSys>Line (arc):  expr = "UnionData";
+			attribute<CoordSys>fromPoint:	expr = "first_node(Line)";
+			attribute<CoordSys>toPoint:		expr = "last_node(Line)";
+			
+			attribute<float32> LengthKm: 	expr = "float32(arc_length(line, float64)) / 1000f";
+			attribute<float32> Seconds:		expr = "MakeDefined((LengthKm / Parameters/WalkingSpeed) * float32(60 * 60), float32(1))";
+		
+			unit<uint32> PointSet: 			expr = "union_unit(Network, Network)" {attribute<CoordSys> points: expr = "union_data(.,fromPoint,toPoint)";}
+			unit<uint32> NodeSet:			expr = "unique(PointSet/points)";
+			
+			attribute<NodeSet>	F1: 		expr = "rlookup(fromPoint,NodeSet/Values)";
+			attribute<NodeSet>  F2: 		expr = "rlookup(toPoint,NodeSet/Values)";
+			
+			attribute<NodeSet>  org_node 	(inODs): 	expr = "rlookup(inODs/point, 	NodeSet/Values)";
+			attribute<NodeSet>	all_node	(points):	expr = "rlookup(points/point, 	NodeSet/Values)";
+			
+			unit<uint32> NetCheck: 	expr = "connected_parts(F1, F2)";
+			
+			//unit<uint32> ODMatrix: expr = "dijkstra_m('directed;startPoint(Node_rel);endPoint(Node_rel,impedance,DstZone_rel);limit(OrgZone_max_mass,DstZone_mass);od:impedance,OrgZone_rel,DstZone_rel,LinkSet',"
+			//	"float32(CurrentNetwork/Duration), CurrentNetwork/F1, CurrentNetwork/F2, ODs/OrgNode, CurrentNetwork/Destinations/NodeRef, CurrentNetwork/Destinations/Penalty, CurrentNetwork/Destinations/ODRef, float32(#ODs), float32(1))" {
+			unit<uint32> ODMatrix: expr = "dijkstra_m('bidirectional;startPoint(Node_rel);endPoint(Node_rel);alternative(link_imp):alt_imp;od:impedance,OrgZone_rel,DstZone_rel',"
+			 "Seconds, F1, F2, org_node, all_node, LengthKm)" {
+				attribute<Time>	   Duration:			expr = "RoundUp(Impedance)[Time]";
+				attribute<float32> TotMinutes: 			expr = "Impedance / float32(60)";
+				attribute<string>  From:				expr = "inODs/Name[OrgZone_rel]";
+				//attribute<string>  To:				expr = "ODs/Name[DstZone_rel]";
+				attribute<uint32>  nOrg (inODs):		expr = "pcount(OrgZone_rel)";
+				attribute<uint32>  nDest(points):		expr = "pcount(DstZone_rel)";
+				attribute<float64> d:					expr = "float64(alt_imp)";
+				attribute<float64> ad:					expr = "d + (float64(points/isOD[DstZone_Rel]) * float64(10000000))";
+				attribute<bool>    dist_sel:			expr = "d > float64(0) && d <= parameters/MaxODDistKm && points/isStop[DstZone_rel]";
+				attribute<bool>    stops_sel:			expr = "points/isStop[DstZone_rel] && ad > float64(0) && ad <= nth_element(ad, parameters/MinODconn, OrgZone_rel)[OrgZone_rel]";
+				attribute<uint32>  ndist_sel  (inODs):	expr = "sum(uint32(dist_sel), OrgZone_rel)";
+				attribute<bool>	   sel:					expr = "ndist_sel[OrgZone_rel] >= parameters/MinODconn ? dist_sel : stops_sel";
+				//attribute<bool>	   sel:					expr = "id(.) = 25";
+			}
+			unit<uint32> ZoneToZoneMatrix: expr = "subset(points/isOD[ODMatrix/DstZone_rel])" {
+				attribute<upoint>	uni_id:				expr = "point(OrgZone_rel, DstZone_Rel, upoint)";
+				attribute<inODs>	OrgZone_rel: 		expr = "ODMatrix/OrgZone_Rel[Nr_OrgEntity]";
+				attribute<inODs>	DstZone_rel:		expr = "points/OrgRef[ODMatrix/DstZone_Rel[Nr_OrgEntity]]";
+				attribute<Time> 	Duration:			expr = "ODMatrix/Duration[Nr_OrgEntity]";
+				attribute<LinkTypes>LinkType:			expr = "const(6,.,LinkTypes)";
+				attribute<float32>	SubjDuration:		expr = "float32(Duration) * LinkTypes/SubjWeight[LinkType]";
+				attribute<float32> 	Distance:			expr = "ODMatrix/alt_imp[Nr_OrgEntity]";
+			}
+			
+			//  creates lines that indicate path from a to b. There is a check to ensure that first node and last node are matching, but there might be issues with inbetween links that are
+			// have issues with directionality causing loops. Only solution would be to reduce the entire shapefile to 
+			unit<uint32> RoadODPaths: expr = "subset(ODMatrix/sel)", KeepData = "True", FreeData = "False" {
+				attribute<inStops>  StopRef: 			expr = "points/OrgRef[ODMatrix/DstZone_rel[Nr_OrgEntity]]";
+				attribute<inODs> 	ODRef:				expr = "ODMatrix/OrgZone_Rel[Nr_OrgEntity]";
+				attribute<CoordSys>	OD_point:			expr = "inODs/point[ODRef]";
+				attribute<CoordSys>	Stop_point:			expr = "inStops/point[StopRef]";
+				attribute<bool> 	checkFrom:			expr = "first_node(line) = Stop_point";
+				attribute<bool> 	checkTo:			expr = "last_node(line) = OD_point";
+				attribute<CoordSys> toPoint:			expr = "last_node(line)";
+				attribute<CoordSys> fromPoint:			expr = "first_node(line)";
+				attribute<CoordSys>	Line (arc):			expr = "points2sequence(LinkPoints/Point, LinkPoints/ODPathRel, LinkPoints/CumulOrdinal)";
+				attribute<float64>	Distance:			expr = "ODMatrix/d[Nr_OrgEntity]";	
+				attribute<Time>		minWalkingTime:		expr = "ODMatrix/Duration[Nr_OrgEntity]";
+				
+				unit<uint32> LinkPoints: expr = "union_unit(RoadODPaths, RoadODPaths)", DialogData = "point", DialogType = "map" {
+					attribute<RoadODPaths> 	ODPathRel: 		expr = "union_data(., id(RoadODPaths), id(RoadODPaths))";
+					attribute<CoordSys>		point:			expr = "union_data(., RoadODPaths/Stop_point, RoadODPaths/OD_point)";
+					attribute<uint32>		CumulOrdinal:	expr = "union_data(., const(0,RoadODPaths,uint32), const(1,RoadODPaths,uint32))";
+				}
+				
+				attribute<uint32>	nConns (inODs): 	expr = "pcount(ODRef)";
+			}
+		}
+		Container ExportPaths: expr = "doExportPaths(Network/RoadODPaths, path + resolution)";
+	}
+	// creates lines that are indicative of real paths from origin to stop.
+	Template createNetwork_osmnx_extended {
+		parameter<uint32> inNetwork;
+		unit<uint32> inStops;
+		unit<uint32> inODs;
+		unit<uint32> Lines: StorageName = "= '%DataDir%/_roadnetworks/'+AvailableRoadNetworks/Name[inNetwork]+'/edges/edges.shp'", StorageType = "gdal.vect", StorageReadOnly = "True", DialogData = "line", DialogType = "map" {
+			attribute<CoordSys> line (arc);
+			attribute<float32>  deg_len: expr = "float32(arc_length(line, float64))";
+		}
+		parameter<string> path: expr = "'%LocalDataProjDir%/export/odpaths'";
+		parameter<string> resolution:	expr = "'custom'";
+		unit<uint32> points: expr = "union_unit(inStops, inODs)", DialogData = "point", DialogType = "map" {
+			attribute<CoordSys> point: expr = "union_data(., inStops/point, inODs/point)";
+			attribute<bool>		isOD:  expr = "union_data(., const(False,inStops,bool), const(True,inODs,bool))";
+			attribute<bool>		isStop:expr = "!isOD";
+			attribute<uint32>	OrgRef:expr = "union_data(., id(inStops), id(inODs))";
+		}
+		
+		unit<uint32> Network: expr = "connect(Lines/line, points/point)", DialogData = "Line", DialogType = "map" {
+			attribute<CoordSys>Line (arc):  expr = "UnionData";
+			attribute<CoordSys>fromPoint:	expr = "first_node(Line)";
+			attribute<CoordSys>toPoint:		expr = "last_node(Line)";
+			
+			attribute<float32> LengthKm: 	expr = "float32(arc_length(line, float64)) / 1000f";
+			attribute<float32> Seconds:		expr = "MakeDefined((LengthKm / Parameters/WalkingSpeed) * float32(60 * 60), float32(1))";
+
+			unit<uint32> PointSet: 			expr = "union_unit(Network, Network)" {attribute<CoordSys> points: expr = "union_data(.,fromPoint,toPoint)";}
+			unit<uint32> NodeSet:			expr = "unique(PointSet/points)";
+			
+			attribute<NodeSet>	F1: 		expr = "rlookup(fromPoint,NodeSet/Values)";
+			attribute<NodeSet>  F2: 		expr = "rlookup(toPoint,NodeSet/Values)";
+			
+			attribute<NodeSet>  org_node 	(inODs): 	expr = "rlookup(inODs/point, 	NodeSet/Values)";
+			attribute<NodeSet>	all_node	(points):	expr = "rlookup(points/point, 	NodeSet/Values)";
+			
+			unit<uint32> NetCheck: 	expr = "connected_parts(F1, F2)";
+			
+			//unit<uint32> ODMatrix: expr = "dijkstra_m('directed;startPoint(Node_rel);endPoint(Node_rel,impedance,DstZone_rel);limit(OrgZone_max_mass,DstZone_mass);od:impedance,OrgZone_rel,DstZone_rel,LinkSet',"
+			//	"float32(CurrentNetwork/Duration), CurrentNetwork/F1, CurrentNetwork/F2, ODs/OrgNode, CurrentNetwork/Destinations/NodeRef, CurrentNetwork/Destinations/Penalty, CurrentNetwork/Destinations/ODRef, float32(#ODs), float32(1))" {
+			unit<uint32> ODMatrix: expr = "dijkstra_m('bidirectional;startPoint(Node_rel);endPoint(Node_rel);alternative(link_imp):alt_imp;od:impedance,OrgZone_rel,DstZone_rel,LinkSet',"
+			 "Seconds, F1, F2, org_node, all_node, LengthKm)" {
+				unit<uint32> links := sequence2points(linkset) {
+					attribute<CoordSys> Line (arc): expr = "Network/Line[links/Point]";
+					attribute<bool>		sel:		expr = "ODMatrix/sel[SequenceNr]";
+				} 
+				attribute<Time>	   Duration:			expr = "RoundUp(Impedance)[Time]";
+				attribute<float32> TotMinutes: 			expr = "Impedance / float32(60)";
+				//attribute<string>  From:				expr = "inODs/Name[OrgZone_rel]";
+				//attribute<string>  To:				expr = "ODs/Name[DstZone_rel]";
+				attribute<uint32>  nOrg (inODs):		expr = "pcount(OrgZone_rel)";
+				attribute<uint32>  nDest(points):		expr = "pcount(DstZone_rel)";
+				attribute<float64> d:					expr = "float64(points/isStop[DstZone_rel] ? (alt_imp) : sum(alt_imp))";
+				attribute<bool>    dist_sel:			expr = "d > float64(0) && d <= parameters/MaxODDistKm && points/isStop[DstZone_rel]";
+				attribute<bool>    stops_sel:			expr = "points/isStop[DstZone_rel] && d > float64(0) && d <= dstops_sel[OrgZone_rel]";
+				attribute<float64> dstops_sel (inODs):	expr = "nth_element(d, parameters/MinODconn, OrgZone_rel)";
+				attribute<uint32>  ndist_sel  (inODs):	expr = "sum(uint32(dist_sel), OrgZone_rel)";
+				attribute<bool>	   sel:					expr = "ndist_sel[OrgZone_rel] >= parameters/MinODconn ? dist_sel : stops_sel";
+				//attribute<bool>	   sel:					expr = "id(.) = 25";
+			}
+			unit<uint32> ZoneToZoneMatrix: expr = "subset(points/isOD[ODMatrix/DstZone_rel])" {
+				attribute<upoint>	uni_id:				expr = "point(OrgZone_rel, DstZone_Rel, upoint)";
+				attribute<inODs>	OrgZone_rel: 		expr = "ODMatrix/OrgZone_Rel[Nr_OrgEntity]";
+				attribute<inODs>	DstZone_rel:		expr = "points/OrgRef[ODMatrix/DstZone_Rel[Nr_OrgEntity]]";
+				attribute<Time> 	Duration:			expr = "ODMatrix/Duration[Nr_OrgEntity]";
+				attribute<float32> 	Distance:			expr = "ODMatrix/alt_imp[Nr_OrgEntity]";
+			}
+			
+			//  creates lines that indicate path from a to b. There is a check to ensure that first node and last node are matching, but there might be issues with inbetween links that are
+			// have issues with directionality causing loops. Only solution would be to reduce the entire shapefile to 
+			unit<uint32> RoadODPaths: expr = "subset(ODMatrix/sel)", KeepData = "True", FreeData = "False"  {
+				attribute<inStops>  from: 				expr = "points/OrgRef[ODMatrix/DstZone_rel[Nr_OrgEntity]]";
+				attribute<inODs> 	to:					expr = "ODMatrix/OrgZone_Rel[Nr_OrgEntity]";
+				attribute<CoordSys>	OD_point:			expr = "inODs/point[to]";
+				attribute<CoordSys>	Stop_point:			expr = "inStops/point[from]";
+				attribute<bool> 	checkFrom:			expr = "first_node(line) = Stop_point";
+				attribute<bool> 	checkTo:			expr = "last_node(line) = OD_point";
+				attribute<CoordSys> toPoint:			expr = "last_node(line)";
+				attribute<CoordSys> fromPoint:			expr = "first_node(line)";
+				attribute<CoordSys>	Line (arc):			expr = "points2sequence(LinkPoints/Point, LinkPoints/ODPathRel, LinkPoints/CumulOrdinal)";
+				attribute<float64>	Distance:			expr = "ODMatrix/d[Nr_OrgEntity]";	
+				attribute<Time>		minWalkingTime:		expr = "ODMatrix/Duration[Nr_OrgEntity]";
+				attribute<uint32>	maxOrd:				expr = "max(LinkSet/Ord,LinkSet/ODPathRel)";
+				
+				// method to generate approximations of real paths. Not usable to obtain distances, ie for visualization purposes only
+				// main advantage vis a vis real link obtainment: no issues with link directionality, no checks needed for exact start and end points
+				unit<uint32> LinkSet: 		expr = "subset(ODMatrix/links/sel)", DialogData = "line", DialogType = "map" {
+					attribute<CoordSys> 		Line (arc): 		expr = "ODMatrix/links/Line[Nr_OrgEntity]";
+					attribute<uint32>			Ord:				expr = "ODMatrix/links/Ordinal[Nr_OrgEntity]";
+					attribute<CoordSys>			fromPoint:			expr = "first_node(Line)";
+					attribute<CoordSys>			toPoint:			expr = "last_node(Line)";
+					attribute<CoordSys>			MidPoint:			expr = "point((pointRow(fromPoint)+pointRow(toPoint))/float64(2.0), (pointCol(fromPoint)+pointCol(toPoint))/float64(2.0), CoordSys)";
+					attribute<RoadODPaths>		ODPathRel:			expr = "rlookup(ODMatrix/links/SequenceNr[Nr_OrgEntity], RoadODPaths/Nr_OrgEntity)";
+				}
+				unit<uint32> LinkPoints: expr = "range(uint32, 0, #LinkSet + (2*#RoadODPaths))", DialogData = "point", DialogType = "map" {
+					attribute<RoadODPaths> 	ODPathRel: 		expr = "union_data(., LinkSet/ODPathRel, id(RoadODPaths), id(RoadODPaths))";
+					attribute<CoordSys>		point:			expr = "union_data(., LinkSet/MidPoint, RoadODPaths/Stop_point, RoadODPaths/OD_point)";
+					attribute<uint32>		CumulOrdinal:	expr = "union_data(., LinkSet/Ord + 1, const(0,RoadODPaths,uint32), RoadODPaths/maxOrd + 2)";
+				}
+			}
+		}
+		Container ExportPaths: expr = "doExportPaths(Network/OD2StopPaths, path + resolution)";
+	}
+	
+	Template doExportPaths {
+		unit<uint32> ODPaths;
+		parameter<string> defpath;
+		parameter<bool>   StoreData: expr = "True", ExplicitSuppliers = "ExportPaths";
+		
+		unit<uint32> ExportPaths: expr = "ODPaths", StorageName = "= defpath+'_odlines.dbf'" {
+			attribute<CoordSys>	Line (arc):			expr = "ODPaths/Line", StorageName = "= defpath +'_odlines.shp'";
+			attribute<uint32>  fromStop:			expr = "ODPaths/from";
+			attribute<uint32>  toOD:				expr = "ODPaths/to";
+			attribute<uint32>  Seconds:				expr = "ODPaths/minWalkingTime";
+			attribute<string>  sFStop:				expr = "inStops/Name[fromStop]";
+			attribute<string>  sTOD:				expr = "inODs/name[toOD]";
+			
+		}
+	}
+	
+	
+	Template OptimiseNetwork_T
+	{
+		parameter<string> IterName;
+		///
+		unit<uint32> PrevIntermediateLinkSet := =IterName != 'Iter_0' ? Iter/prevname[rlookup(IterName, Iter/name)]+'/IntermediateLinkSet' : 'LinkSet_src';
+		
+		unit<uint32> uq_OD_points := NetwerkSpec/uq_OD_points //fka UniqueLocations
+		{
+			attribute<NodeSet> Node_rel                    := rlookup(geometry, NodeSet/geometry); // relation from the OD-points towards the nodeset. Should all be defined if there was no set limit for the connect which connected the OD-points to the network. 
+			attribute<LinkSet> Link_rel                    := rlookup(Node_rel, LinkSet/F1); // the linkset is not constant over iters, so we need a new link_rel. Which is here the PrevIterlinkSet
+			attribute<NodeSet> Node_rel_if_new_ODlink      := Link_rel -> F2; // the node id of the node that is on the existing network that connects an OD-point to the network
+			attribute<NodeSet> Node_rel_of_link_to_network := !(link_rel -> IsOD_connection_road) ? Node_rel : Node_rel_if_new_ODlink; // check for the case where the OD-point is located exactly on an existing node.
+		}
+		
+		unit<uint32> LinkSet := PrevIntermediateLinkSet
+		{
+			attribute<bool>                            IsOneDirection                 := PrevIntermediateLinkSet/IsOneDirection;
+			
+			attribute<bool>                            IsPartOfJunctionFreeSection    := NodeSet/WillBeDeleted[F1] || NodeSet/WillBeDeleted[F2];
+			attribute<bool>                            IsInsideJunctionFreeSection    := NodeSet/WillBeDeleted[F1] && NodeSet/WillBeDeleted[F2];
+			attribute<bool>                            IsOnBorderOfJunctionFreeSection:= IsPartOfJunctionFreeSection && !IsInsideJunctionFreeSection;
+			attribute<bool>                            IsFinalLink                    := !IsPartOfJunctionFreeSection;
+			
+			// For visualisation
+			attribute<CoordSys>                     geometry (arc)          := PrevIntermediateLinkSet/geometry;
+		}
+		
+		unit<uint32> NodeSet  := NodeSet_src 
+		, Descr = "set of all nodes in the network, comprised of the nodes from the original network AND the OD-points." 
+		{
+			attribute<uint32>                          NrConnectedLinks               := pcount(LinkSet/F1) + pcount(LinkSet/F2);
+			attribute<bool>                            BordersWithOneDirectionalRoad  := LinkSet/IsOneDirection[invert(LinkSet/F1)] || LinkSet/IsOneDirection[invert(LinkSet/F2)];
+			attribute<bool>                            WillBeDeleted                  := NrConnectedLinks == 2  // 2 connectinglinks means intermediary without junction
+																							&& !IsOD_connection_road;
+			attribute<bool>                            IsOD_connection_road           := pcount(uq_OD_points/Node_rel) != 0 // if there are node_rel's then it is an connected OD-point.
+																							|| pcount(uq_OD_points/Node_rel_of_link_to_network) != 0; //if a node is used in the connection link between network and OD-point, then it is the connecting node
+
+			//Forward relations
+			attribute<JunctionFreeSection_wC>          JunctionFreeSection_wC_rel     := ConnectedParts/JunctionFreeSection_wC_rel[ConnectedParts_rel];
+			attribute<ConnectedParts>                  ConnectedParts_rel             := ConnectedParts/PartNr;
+			attribute<bool>                            IsOrgDest_location             := IsDefined(invert(uq_OD_points/Node_rel));
+			attribute<uint32>                          NrConnectedLinks_in_LinkSet_cleanedforJFS := pcount(LinkSet_cleanedforJFS/F1) + pcount(LinkSet_cleanedforJFS/F2);
+			attribute<bool>                            IsDeadEnd_and_NotOD            := NrConnectedLinks_in_LinkSet_cleanedforJFS == 1 && !IsOrgDest_location;
+			
+			// For visualisation
+			attribute<CoordSys>                     geometry                                := NodeSet_src/geometry;
+			attribute<bool>                            Check_if_JFS_Nodes_has_no_ConnectorLink := IsDefined(JunctionFreeSection_wC_rel) 
+																										&& not(IsDefined(JunctionFreeSection_wC/First_ConnectorLink_rel)[JunctionFreeSection_wC_rel] 
+																												&& IsDefined(JunctionFreeSection_wC/Last_ConnectorLink_rel)[JunctionFreeSection_wC_rel]); // to detect cycles
+		}
+
+		unit<uint32> LinksInsideJunctionFreeSection := select(LinkSet/IsInsideJunctionFreeSection), Descr = "Those links that are in the junction free section"
+		{
+			attribute<s_f>                             impedance                      := collect_by_cond(LinksInsideJunctionFreeSection, LinkSet/IsInsideJunctionFreeSection, LinkSet/impedance);
+			attribute<km>                              Length                       := collect_by_cond(LinksInsideJunctionFreeSection, LinkSet/IsInsideJunctionFreeSection, LinkSet/Length);
+			attribute<NodeSet>                         F1                             := collect_by_cond(LinksInsideJunctionFreeSection, LinkSet/IsInsideJunctionFreeSection, LinkSet/F1);
+			attribute<NodeSet>                         F2                             := collect_by_cond(LinksInsideJunctionFreeSection, LinkSet/IsInsideJunctionFreeSection, LinkSet/F2); 
+			attribute<bool>                            IsOneDirection                 := collect_by_cond(LinksInsideJunctionFreeSection, LinkSet/IsInsideJunctionFreeSection, LinkSet/IsOneDirection); 
+			attribute<JunctionFreeSection_wC>          JunctionFreeSection_wC_rel     := NodeSet/JunctionFreeSection_wC_rel[F1];
+			
+			//For visualisation
+			attribute<CoordSys>                     geometry  (arc)                :=  collect_by_cond(LinksInsideJunctionFreeSection, LinkSet/IsInsideJunctionFreeSection, LinkSet/geometry);
+			
+		}
+		unit<uint32> nodesetref:= NodeSet;
+		unit<uint32> ConnectedParts := connected_parts(LinksInsideJunctionFreeSection/F1, LinksInsideJunctionFreeSection/F2)
+		, Descr = "Check if nodes inside JFS are connected, thereby clustering JFS' together if they exist of more than one link."
+		{
+			attribute<NodeSet>                         FirstNode_rel                   := invert(PartNr);
+			attribute<bool>                            IsJunctionFreeSection           := NodeSet/WillBeDeleted[FirstNode_rel];
+			attribute<JunctionFreeSection_wC>          JunctionFreeSection_wC_rel      := recollect_by_cond(ConnectedParts/IsJunctionFreeSection, ID(JunctionFreeSection_wC));
+		}
+		
+		unit<uint32> ConnectorLink := select_with_org_rel(LinkSet/IsOnBorderOfJunctionFreeSection)
+		, Descr = "Those links that connect the unchanged links with the junction free links"
+		{
+			attribute<NodeSet>                         F1                             := LinkSet/F1[org_rel];
+			attribute<NodeSet>                         F2                             := LinkSet/F2[org_rel]; 
+			attribute<bool>                            is_F1_deleted                  := NodeSet/WillBeDeleted[F1];
+			attribute<bool>                            is_only_one_delete             := NodeSet/WillBeDeleted[F1] != NodeSet/WillBeDeleted[F2];
+			attribute<NodeSet>                         F_keep                         := is_F1_deleted ? F2 : F1; // Unchanged Node
+			attribute<NodeSet>                         F_delete                       := is_F1_deleted ? F1 : F2; // Node in JunctionFreeSection
+			attribute<JunctionFreeSection_wC>          JunctionFreeSection_wC_rel     := NodeSet/JunctionFreeSection_wC_rel[F_delete];
+			attribute<NodeSet>                         NodeSet_rel                    := F_keep;
+			attribute<s_f>                             Impedance                      := LinkSet/Impedance[org_rel];
+			attribute<km>                              Length                       := LinkSet/Length[org_rel];
+			attribute<bool>                            IsOneDirection                 := LinkSet/IsOneDirection[org_rel];
+			
+			//For visualisation
+			attribute<CoordSys>                     geometry  (arc)                := LinkSet/geometry[org_rel];
+		}
+		
+		unit<uint32> JunctionFreeSection_wC := select_with_org_rel(ConnectedParts/IsJunctionFreeSection)
+		{
+			attribute<ConnectorLink>                   First_ConnectorLink_rel        := first(id(ConnectorLink), ConnectorLink/JunctionFreeSection_wC_rel); //todo sneller
+			attribute<ConnectorLink>                   Last_ConnectorLink_rel         := last(id(ConnectorLink), ConnectorLink/JunctionFreeSection_wC_rel); //todo sneller
+			attribute<bool>                            IsNonCyclic_JFS                := IsDefined(First_ConnectorLink_rel) && IsDefined(Last_ConnectorLink_rel);
+			
+			attribute<s_f>                             Aggregated_Impedence           := sum(LinksInsideJunctionFreeSection/impedance, LinksInsideJunctionFreeSection/JunctionFreeSection_wC_rel);
+			attribute<s_f>                             First_ConnectorLink_Impedance  := ConnectorLink/Impedance[First_ConnectorLink_rel];
+			attribute<s_f>                             Last_ConnectorLink_Impedance   := ConnectorLink/Impedance[Last_ConnectorLink_rel];
+			attribute<s_f>                             Total_Impedance                := Aggregated_Impedence + First_ConnectorLink_Impedance + Last_ConnectorLink_Impedance;
+			
+			attribute<km>                              Aggregated_Length            := sum(LinksInsideJunctionFreeSection/Length, LinksInsideJunctionFreeSection/JunctionFreeSection_wC_rel);
+			attribute<km>                              First_ConnectorLink_Length   := ConnectorLink/Length[First_ConnectorLink_rel];
+			attribute<km>                              Last_ConnectorLink_Length    := ConnectorLink/Length[Last_ConnectorLink_rel];
+			attribute<km>                              Total_Length                 := Aggregated_Length + First_ConnectorLink_Length + Last_ConnectorLink_Length;
+			
+			attribute<NodeSet>                         Fa                             := ConnectorLink/NodeSet_rel[First_ConnectorLink_rel];
+			attribute<NodeSet>                         Fb                             := ConnectorLink/NodeSet_rel[Last_ConnectorLink_rel];  
+			
+			attribute<NodeSet>                         F1                             :=  First_ConnectorLink_rel -> F1 == Fa ? Fa : Fb;
+			attribute<NodeSet>                         F2                             :=  First_ConnectorLink_rel -> F1 == Fa ? Fb : Fa;
+			
+			attribute<bool>                            First_ConnectorLink_IsOneDirection := ConnectorLink/IsOneDirection[First_ConnectorLink_rel];
+			attribute<bool>                            Last_ConnectorLink_IsOneDirection  := ConnectorLink/IsOneDirection[Last_ConnectorLink_rel];
+			attribute<bool>                            Links_InsideJFS_IsOneDirection     := all(LinksInsideJunctionFreeSection/IsOneDirection, LinksInsideJunctionFreeSection/JunctionFreeSection_wC_rel);
+			
+			attribute<bool>                            IsOneDirection                     := First_ConnectorLink_IsOneDirection && Last_ConnectorLink_IsOneDirection && Links_InsideJFS_IsOneDirection;
+			attribute<bool>                            IsOD_connection_road               := const(FALSE,.);
+			
+			//For visualisation
+			attribute<CoordSys>                     FirstPoint                     := NodeSet/Geometry[F1];
+			attribute<CoordSys>                     LastPoint                      := NodeSet/Geometry[F2];
+			attribute<CoordSys>                     geometry (arc)                 := points2sequence(PointSet/Point, PointSet/SeqNr, PointSet/Ordinal);
+			unit<uint32> PointSet := union_unit(.,.)
+			{
+				attribute<CoordSys>                 Point   := Union_Data(., ../FirstPoint, ../LastPoint);
+				attribute<..>                          SeqNr   := value(id(.) % nrofrows(..), ..);
+				attribute<uint32>                      Ordinal := id(.) / nrofrows(..);
+			}
+		}
+		
+		unit<uint32> JunctionFreeSection := select(JunctionFreeSection_wC/IsNonCyclic_JFS)
+		, Descr = "In previous steps, cleanup could result in cycles (kind of circles), which are JFS' in itself. These collapse on itself and should be cleaned."
+		{
+			attribute<NodeSet>                         F1                             := collect_by_cond(., JunctionFreeSection_wC/IsNonCyclic_JFS, JunctionFreeSection_wC/F1);
+			attribute<NodeSet>                         F2                             := collect_by_cond(., JunctionFreeSection_wC/IsNonCyclic_JFS, JunctionFreeSection_wC/F2);
+			attribute<s_f>                             impedance                      := collect_by_cond(., JunctionFreeSection_wC/IsNonCyclic_JFS, JunctionFreeSection_wC/Total_Impedance);
+			attribute<km>                              Length                       := collect_by_cond(., JunctionFreeSection_wC/IsNonCyclic_JFS, JunctionFreeSection_wC/Total_Length);
+			attribute<bool>                            IsOneDirection                 := collect_by_cond(., JunctionFreeSection_wC/IsNonCyclic_JFS, JunctionFreeSection_wC/IsOneDirection);
+			attribute<bool>                            IsOD_connection_road           := collect_by_cond(., JunctionFreeSection_wC/IsNonCyclic_JFS, JunctionFreeSection_wC/IsOD_connection_road);
+		}
+		
+		unit<uint32> UnchangedLinkSet := select_with_org_rel(LinkSet/IsFinalLink) //todo sneller zonder org_rel
+		, Descr = "Those links that can be used without changes, i.e. no nodes need to be removed"
+		{
+			attribute<NodeSet>                         F1                             := LinkSet/F1[org_rel];
+			attribute<NodeSet>                         F2                             := LinkSet/F2[org_rel];
+			attribute<s_f>                             impedance                      := LinkSet/impedance[org_rel];
+			attribute<km>                              Length                       := LinkSet/Length[org_rel];
+			attribute<bool>                            IsOneDirection                 := LinkSet/IsOneDirection[org_rel];
+			attribute<bool>                            IsOD_connection_road           := LinkSet/IsOD_connection_road[org_rel];
+			
+			//For visualisation
+			attribute<CoordSys>                     FirstPoint                     := NodeSet/geometry[F1];
+			attribute<CoordSys>                     LastPoint                      := NodeSet/geometry[F2];
+			attribute<CoordSys>                     geometry (arc)                 := points2sequence(PointSet/Point, PointSet/SeqNr, PointSet/Ordinal);
+			unit<uint32> PointSet := union_unit(.,.)
+			{
+				attribute<CoordSys>                 Point   := Union_Data(., ../FirstPoint, ../LastPoint);
+				attribute<..>                          SeqNr   := value(id(.) % nrofrows(..), ..);
+				attribute<uint32>                      Ordinal := id(.) / nrofrows(..);
+			}
+		}
+		
+		unit<uint32> LinkSet_cleanedforJFS := union_unit(UnchangedLinkSet, JunctionFreeSection)
+		, Descr = "The final link set"
+		{
+			attribute<NodeSet>                         F1                             := union_data(., UnchangedLinkSet/F1, JunctionFreeSection/F1);
+			attribute<NodeSet>                         F2                             := union_data(., UnchangedLinkSet/F2, JunctionFreeSection/F2);
+			attribute<s_f>                             impedance_org                  := union_data(., UnchangedLinkSet/impedance, JunctionFreeSection/impedance);
+			attribute<s_f>                             impedance                      := !IsOneDirection ? MakeDefined(Find_DuplicateLinks/min_impedance[Find_DuplicateLinks_rel],impedance_org) : impedance_org;
+
+			attribute<km>                              Length_org                   := union_data(., UnchangedLinkSet/Length, JunctionFreeSection/Length);
+			attribute<km>                              Length                       := MakeDefined(Find_DuplicateLinks/min_length_km[Find_DuplicateLinks_rel],Length_org);
+			attribute<bool>                            IsOneDirection                 := union_data(., UnchangedLinkSet/IsOneDirection, JunctionFreeSection/IsOneDirection);
+			
+			attribute<bool>                            IsLinkWithDeadEnd              := NodeSet/IsDeadEnd_and_NotOD[F1] || NodeSet/IsDeadEnd_and_NotOD[F2];
+			attribute<bool>                            IsLinkConnectedWithItself      := F1 == F2;
+			attribute<bool>                            IsDuplicateLink                := Find_DuplicateLinks/IsDuplicateLink[Find_DuplicateLinks_rel] && id(.) != Find_DuplicateLinks/FirstLink[Find_DuplicateLinks_rel];
+			
+			attribute<bool>                            ToBeOmitted                    := (IsLinkWithDeadEnd || IsLinkConnectedWithItself || IsDuplicateLink) && !IsOneDirection;
+			attribute<bool>                            IsOD_connection_road           := union_data(., UnchangedLinkSet/IsOD_connection_road, JunctionFreeSection/IsOD_connection_road);
+			
+			attribute<Nodeset_x_NodeSet>               Nodeset_x_NodeSet_rel          := combine_data(Nodeset_x_NodeSet, min_elem(F1, F2), max_elem(F1,F2)); //TO DO let op direction
+			attribute<Find_DuplicateLinks>             Find_DuplicateLinks_rel        := rlookup(Nodeset_x_NodeSet_rel, Find_DuplicateLinks/values);
+
+			//After clean up, the reduced road could collapse into a road which is duplicate.
+			// TO DO: these duplicates were duplicates without direction, with directions this is not necesarily a duplicate.
+			unit<uint32> Find_DuplicateLinks := unique(Nodeset_x_NodeSet_rel)
+			{
+				attribute<uint32>                    count_occurence := pcount(Find_DuplicateLinks_rel);
+				attribute<bool>                      IsDuplicateLink := count_occurence > 1;
+				attribute<s_f>                       min_impedance   := min(../impedance_org, Find_DuplicateLinks_rel);
+				attribute<km>                        min_length_km   := min(../Length_org, Find_DuplicateLinks_rel);
+				attribute<..>                        FirstLink       := first(id(..), Find_DuplicateLinks_rel);
+			}
+			
+			//For visualisation
+			attribute<CoordSys>                  FirstPoint                     := NodeSet/geometry[F1];
+			attribute<CoordSys>                  LastPoint                      := NodeSet/geometry[F2];
+			attribute<CoordSys>                  geometry (arc)                 := points2sequence(PointSet/Point, PointSet/SeqNr, PointSet/Ordinal);
+			unit<uint32> PointSet := union_unit(.,.)
+			{
+				attribute<CoordSys>  Point   := Union_Data(., ../FirstPoint, ../LastPoint);
+				attribute<..>           SeqNr   := value(id(.) % nrofrows(..), ..);
+				attribute<uint32>       Ordinal := id(.) / nrofrows(..);
+			}
+		}
+		
+		//Verwijder links naar dead ends (if F1 or F2 occurs only once in all F1/F2, and not being OD-location)
+		unit<uint32> IntermediateLinkSet := select(!LinkSet_cleanedforJFS/ToBeOmitted)
+		{
+			attribute<NodeSet> F1 := collect_by_cond(., !LinkSet_cleanedforJFS/ToBeOmitted, LinkSet_cleanedforJFS/F1);
+			attribute<NodeSet> F2 := collect_by_cond(., !LinkSet_cleanedforJFS/ToBeOmitted, LinkSet_cleanedforJFS/F2);
+
+			attribute<s_f>     Impedance      := collect_by_cond(., !LinkSet_cleanedforJFS/ToBeOmitted, LinkSet_cleanedforJFS/impedance);
+			attribute<km>      Length         := collect_by_cond(., !LinkSet_cleanedforJFS/ToBeOmitted, LinkSet_cleanedforJFS/Length);
+			attribute<bool>    IsOneDirection := collect_by_cond(., !LinkSet_cleanedforJFS/ToBeOmitted, LinkSet_cleanedforJFS/IsOneDirection);
+			attribute<bool>    IsOD_connection_road       := collect_by_cond(., !LinkSet_cleanedforJFS/ToBeOmitted, LinkSet_cleanedforJFS/IsOD_connection_road);
+			
+			parameter<uint32>  count_arcs := #.;
+			
+			//For visualisation
+			unit<uint32> PointSet := union_unit(.,.);
+			attribute<CoordSys> geometry (arc) := points2sequence(Union_Data(PointSet, NodeSet/geometry[F1], NodeSet/geometry[F2]), value(id(PointSet) %#IntermediateLinkSet, IntermediateLinkSet));
+		}
+	}
+}

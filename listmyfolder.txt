@@ -1,0 +1,43 @@
+E:\ProjDir\GTFS
+|   
++---batch
+|       getAccessResults.cmd
+|       
++---cfg
+|   |   main.dms
+|   |   
+|   |           
+|   \---main
+|           DataManagement.dms
+|           do_Analysis_templates.dms
+|           gen_Network_templates.dms
+|           load_GTFS_templates.dms
+|           Modes.dms
+|           OD_set_generation.dms
+|           road_Network_templates.dms
+|           Templates.dms
+|           
++---dll
+|   |   DMSProject.cfg
+|   |   DMSProject.dof
+|   |   DMSProject.dpr
+|   |   DMSProject.res
+|   |   Unit_About.dfm
+|   |   Unit_About.pas
+|   |   Unit_Splash.dfm
+|   |   Unit_Splash.pas
+|   |   
+|   \---res
+|           DMSProjectEx.res
+|           LogoEuClueScanner.jpg
+|           World.ico
+|           
++---docs
+|       CJC GTFS configuration.pptx
+|       LewisDijkstra_accessibility_indicator.pdf
+|       study_area_selection.xlsx
+|       
+\---examplescripts
+        DepartureTime.R
+        R01_Limit_GTFS_to_date.R
+        
