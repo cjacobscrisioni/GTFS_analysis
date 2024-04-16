@@ -21,6 +21,16 @@ container road_Network_Templates: Using = "DataManagement;" {
 		
 		parameter<string> setname:= propvalue(., 'Name');
 		
+		parameter<string> LinkSetPath:= '%LocalDataProjDir%/studyarea_roads/fss/'+StudyArea/setname+'/Optimised_Linkset_'+setname+'.fss';
+		parameter<string> NodeSetPath:= '%LocalDataProjDir%/studyarea_roads/fss/'+StudyArea/setname+'/Optimised_Nodeset_'+setname+'.fss';
+		parameter<string> RoadODConnPath:= '%LocalDataProjDir%/studyarea_roads/fss/'+StudyArea/setname+'/Road_OD_paths_'+setname+'.fss';
+		
+		parameter<bool> b1_optimisenetwork:= True, ExplicitSuppliers = "CreateMoreEfficientNetwork/FinalLinkSet_Write;CreateMoreEfficientNetwork/FinalNodeSet_Write;";
+		parameter<bool> b2_create_od_conns:= True, ExplicitSuppliers = "Network/Store_RoadODPaths;";
+		
+		parameter<bool> optimised_networks_already_stored:= ExistingFile('XXXXX', LinkSetPath) = expand(., LinkSetPath) && ExistingFile('XXXXX', NodeSetPath) = expand(., NodeSetPath);
+		parameter<bool> road_od_conn_paths_already_stored:= ExistingFile('XXXXX', RoadODConnPath) = expand(., RoadODConnPath);
+		
 		container NetwerkSpec {
 			unit<uint32> points: expr = "union_unit(inStops, inODs)", DialogData = "point", DialogType = "map" {
 				attribute<CoordSys> geometry: expr = "union_data(., inStops/point, inODs/geometry)";
@@ -93,13 +103,13 @@ container road_Network_Templates: Using = "DataManagement;" {
 			unit<uint32> LastLinkSet  := OptimiseNetwork/LastIter/IntermediateLinkSet;
 			
 			// hardstore optimised network and nodeset
-			unit<uint32> FinalNodeSet_Write := select_with_org_rel(pcount(LastLinkSet/F1)+pcount(LastLinkSet/F2) > 0),	StorageName = "= '%LocalDataProjDir%/studyarea_roads/fss/'+StudyArea/setname+'/Optimised_Nodeset_'+setname+'.fss'" 
+			unit<uint32> FinalNodeSet_Write := select_with_org_rel(pcount(LastLinkSet/F1)+pcount(LastLinkSet/F2) > 0),	StorageName = "= NodeSetPath" 
 			{
 				attribute<CoordSys>        	  geometry                  := org_rel->values;
 				attribute<.>                  Stop_rel  (inStops)  	:= rlookup(inStops/point,  geometry);
 				attribute<.>                  OD_rel 	(inODs) 	:= rlookup(inODs/geometry, geometry);	
 			}
-			unit<uint32> FinalLinkSet_Write := LastLinkSet,	StorageName = "= '%LocalDataProjDir%/studyarea_roads/fss/'+StudyArea/setname+'/Optimised_Linkset_'+setname+'.fss'" 
+			unit<uint32> FinalLinkSet_Write := LastLinkSet,	StorageName = "= LinkSetPath" 
 			{
 				attribute<FinalNodeSet_Write> F1                   := invert(FinalNodeSet_Write/org_rel)[LastLinkSet/F1];
 				attribute<FinalNodeSet_Write> F2                   := invert(FinalNodeSet_Write/org_rel)[LastLinkSet/F2];
@@ -110,14 +120,14 @@ container road_Network_Templates: Using = "DataManagement;" {
 			}
 			
 			// read stored nodeset and links
-			unit<uint32> FinalNodeSet_Read : storagename = "= propvalue(FinalNodeSet_Write, 'StorageName')", StorageReadOnly = "True"
+			unit<uint32> FinalNodeSet_Read : storagename = "= NodeSetPath", StorageReadOnly = "True"
 			{
 				attribute<CoordSys>   geometry; 
 				attribute<.>             Stop_rel  (inStops);
 				attribute<.>             OD_rel 	(inODs);
 				attribute<bool>			 OD_null (inODs):= isnull(OD_rel);
 			}
-			unit<uint32> FinalLinkSet_Read : StorageName = "= propvalue(FinalLinkSet_Write, 'StorageName')", StorageReadOnly = "True"
+			unit<uint32> FinalLinkSet_Read : StorageName = "= LinkSetPath", StorageReadOnly = "True"
 			{
 				attribute<FinalNodeSet_Read>      F1;
 				attribute<FinalNodeSet_Read>      F2;
@@ -137,7 +147,11 @@ container road_Network_Templates: Using = "DataManagement;" {
 					attribute<uint32>                   Ordinal := id(.) / nrofrows(..);
 				}
 				
-				unit<uint32> Without_OD_connection_roads := select_with_attr_by_org_rel(.,!IsOD_connection_road);
+				unit<uint32> Export_net:= FinalLinkSet_Read, storagename = "= '%LocalDataProjDir%/studyarea_roads/shp/'+StudyArea/setname+'/'+setname+'.dbf'" {
+					attribute<.> id:= id(.); 
+					attribute<CoordSys>geometry (arc):= ../Geometry, storagename = "= '%LocalDataProjDir%/studyarea_roads/shp/'+StudyArea/setname+'/'+setname+'.shp'";
+					attribute<uint8> OD_conn:= ../IsOD_connection_road[uint8];
+				}
 			}
 		}
 		unit<uint32> Network:= CreateMoreEfficientNetwork/FinalLinkSet_Read {
@@ -206,14 +220,14 @@ container road_Network_Templates: Using = "DataManagement;" {
 					attribute<uint32>			CumulOrdinal:	expr = "union_data(., const(0,Gen_RoadODPaths,uint32), const(1,Gen_RoadODPaths,uint32))";
 				}
 			}
-			unit<uint32> Store_RoadODPaths:= Gen_RoadODPaths, storagename = "= '%LocalDataProjDir%/studyarea_roads/fss/'+StudyArea/setname+'/Road_OD_paths_'+setname+'.fss'" {
+			unit<uint32> Store_RoadODPaths:= Gen_RoadODPaths, storagename = "= RoadODConnPath" {
 				attribute<inStops>  StopRef:= Gen_RoadODPaths/StopRef;
 				attribute<inODs> 	ODRef:= Gen_RoadODPaths/ODRef;
 				attribute<CoordSys> line (arc):= Gen_RoadODPaths/line;
 				attribute<Time>		minWalkingTime:= Gen_RoadODPaths/minWalkingTime;
 			
 			}
-			unit<uint32> RoadODPaths: storagename = "= propvalue(Store_RoadODPaths, 'StorageName')", StorageReadOnly = "True" {
+			unit<uint32> RoadODPaths: storagename = "= RoadODConnPath", StorageReadOnly = "True" {
 				attribute<inStops>  StopRef;
 				attribute<inODs> 	ODRef;
 				attribute<CoordSys> line (arc);

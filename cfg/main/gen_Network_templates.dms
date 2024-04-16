@@ -17,6 +17,10 @@ container gen_Network_templates: Using = "Definitions;" {
 		
 		parameter<uint32> inStudyArea: expr = "AnalysesConfiguration/Analyses/nr_1[inAnalysis]";
 		
+		parameter<bool> b1_store_static_net:= True, explicitsuppliers = "store_Static_Net;";
+		parameter<string> static_net_path:= '%localdataprojdir%/static_nets/'+AnalysesConfiguration/Analyses/Name[inAnalysis]+'/links.fss';
+		parameter<bool> static_net_already_stored:= ExistingFile('XXXXX', static_net_path) = expand(., static_net_path);
+		
 		unit<uint32> MeasureMoments: expr = "AnalysesConfiguration/TimeSampling/MeasureMoments";
 		
 		// Links should later depend on trips active according to calendar!!!
@@ -49,14 +53,14 @@ container gen_Network_templates: Using = "Definitions;" {
 			attribute<string>					LabelText:	expr = "'Scheduled: ' + Time/LabelText[depTime] + ' @ ' + Stops/Name[fromStop] + ' to ' + Time/LabelText[arrTime] + ' @ ' + Stops/Name[toStop]", DialogType = "LabelText";
 			unit<uint32> findUniqueSpaceTimeEvents: expr = "union_unit(ScheduledLinks, ScheduledLinks)" {
 				attribute<upoint> timesOfStop: 	expr = "union_data(., point(ScheduledLinks/fromStop, ScheduledLinks/depTime), point(ScheduledLinks/toStop, ScheduledLinks/arrTime))";
-				attribute<Time>   TimeRef:			expr = "pointCol(timesOfStop)";
+				attribute<Time>   TimeRef:			expr = "pointCol(timesOfStop)[Time]";
 			}
 		}
 		unit<uint32> ScheduledTimeEvents:			expr = "unique(ScheduledLinks/findUniqueSpaceTimeEvents/TimeRef)";
 		unit<uint32> ScheduledSpaceTimeEvents: 		expr = "unique(ScheduledLinks/findUniqueSpaceTimeEvents/TimesOfStop)" {
 			attribute<Stops> 	StopRef: 			expr = "pointRow(Values)[Stops]";
 			attribute<Time>    	TimeRef: 			expr = "pointCol(Values)[Time]";
-			attribute<uint32> 	ODconnects:			expr = "pcount(CreateODconnections/ODPaths/From)[StopRef]";
+			attribute<uint32> 	ODconnects:			expr = "pcount(CreateODconnections/OD_Path/StopRef)[StopRef]";
 			attribute<string> 	LabelText:			expr = "Stops/Name[StopRef] + ' @ ' + Time/LabelText[TimeRef]";
 			attribute<.>		FirstMoment:		expr = "min_index(TimeRef, StopRef)[StopRef]";
 			attribute<.>		NextMoment:			expr = "StopRef[id(.)+1] = StopRef ? id(.) + 1 : FirstMoment";
@@ -172,7 +176,7 @@ container gen_Network_templates: Using = "Definitions;" {
 				attribute<Time>                       Duration          := OD_path/minWalkingTime[OD_rel];
 				
 				attribute<Time>                       Stop_Time 	    := ScheduledSpaceTimeEvents/TimeRef[SSTE_rel];
-				attribute<Time>                       FromOD_Time       := Stop_Time[int32] - Duration[int32] > 0i ? Stop_Time - Duration : (Stop_Time + #Time) - Duration;
+				attribute<Time>                       FromOD_Time       := isdefined(sub_or_null(Stop_Time, Duration)) ? sub_or_null(Stop_Time, Duration) : (Stop_Time + #Time) - Duration;
 				attribute<Time>                       ToOD_Time         := Stop_Time + Duration < #Time ? Stop_Time + Duration : sub_or_null(Stop_Time + Duration, #Time);
 				attribute<string>                     FromStop_LabelText:= 'Walk from stop ' + Stops/Name[Stop_rel] + ' @ '+Time/LabelText[Stop_Time]+' to destination ' + ODs/Name[ZoneRef] + ' @ '+Time/LabelText[ToOD_Time], DialogType = "LabelText";
 				attribute<string>                     ToStop_LabelText  := 'Walk from origin ' + ODs/Name[ZoneRef] + ' @ '+Time/LabelText[FromOD_Time]+' to destination ' + Stops/Name[Stop_rel] + ' @ '+Time/LabelText[Stop_Time], DialogType = "LabelText";
@@ -188,7 +192,7 @@ container gen_Network_templates: Using = "Definitions;" {
 			attribute<Time> 	toTime: 	expr = "union_data(., ScheduledLinks/arrTime, CreateTransfersSet/TransfersByStart/toTime, CreateODconnections/ODpathsByStart/ToOD_Time)";
 			attribute<uint32> 	Duration:	expr = "union_data(., ScheduledLinks/Duration, CreateTransfersSet/TransfersByStart/Duration, CreateODconnections/ODpathsByStart/Duration)";
 			attribute<string>	LabelText:	expr = "union_data(., ScheduledLinks/LabelText, CreateTransfersSet/TransfersByStart/LabelText, CreateODconnections/ODpathsByStart/FromStop_LabelText)", DialogType = "LabelText";
-			attribute<LinkTypes>LinkType:	expr = "union_data(., const(LinkTypes/Values/Scheduled,ScheduledLinks,LinkTypes), const(LinkTypes/Values/Transfer,CreateTransfersSet/TransfersByStart,LinkTypes), const(LinkTypes/Values/Stop_to_OD,CreateODconnections/ODpathsByStart,LinkTypes))";
+			attribute<LinkTypes>LinkType:	expr = "union_data(., ScheduledLinks/LinkType, const(LinkTypes/Values/Transfer,CreateTransfersSet/TransfersByStart,LinkTypes), const(LinkTypes/Values/Stop_to_OD,CreateODconnections/ODpathsByStart,LinkTypes))";
 			attribute<CoordSys> fromPoint:	expr = "first_node(Line)";
 			attribute<CoordSys> toPoint:	expr = "last_node(Line)";
 			attribute<Places>	FromPlace:	expr = "rlookup(fromPoint, Places/Values)";
@@ -256,6 +260,60 @@ container gen_Network_templates: Using = "Definitions;" {
 			unit<uint32> NodeSet: 	expr = "allLinks/NodeSet", FreeData = "False";
 			unit<uint32> NetCheck: 	expr = "connected_parts(F1, F2)";
 		}
+		unit<uint32> store_Static_Net:= Static_Net, storagename = "= static_net_path" {
+			attribute<CoordSys> FromPoint:= first_point(Line);
+			attribute<CoordSys> ToPoint:= last_point(Line);
+			attribute<string> 	Label:= LabelText;
+			attribute<Time> 	FromTime:= Static_Net/FromTime;
+			attribute<Time>		ToTime:= Static_Net/ToTime;
+			attribute<LinkTypes>LinkType:= Static_Net/LinkType;
+		}
+		unit<uint32> load_Static_Net: storagename = "= static_net_path", storagereadonly = "True" {
+			attribute<CoordSys> Geometry (arc):= points2sequence(doubledLinks/geometry, convert(id(doubledLinks) % #., .));
+			attribute<CoordSys> FromPoint; 
+			attribute<CoordSys> ToPoint; 
+			attribute<string> 	Label; 
+			attribute<Time> 	FromTime; 
+			attribute<Time>		ToTime; 
+			attribute<LinkTypes>LinkType;
+			attribute<uint32> 	Duration:= FromTime < ToTime ? sub_or_null(ToTime, FromTime) : (ToTime + #Time) - FromTime;
+			attribute<Places>	FromPlace:= rlookup(FromPoint, Places/Values);
+			attribute<Places>	ToPlace:=	rlookup(ToPoint, Places/Values);
+			attribute<NodeSet>	F1:= rlookup(point(FromPlace, FromTime), NodeSet/Values);
+			attribute<NodeSet>	F2:= rlookup(point(ToPlace, ToTime), NodeSet/Values);
+			
+			unit<uint32> doubledLinks:= union_unit(load_Static_Net, load_Static_Net) {
+				attribute<CoordSys> Geometry:= union_data(., FromPoint, ToPoint);
+				attribute<Time> 	Moment:= union_data(., fromTime, toTime);
+				attribute<Places>	Place:= rlookup(Geometry, Places/Values);
+				attribute<upoint>	PlacexMoment:= point(Place, Moment, upoint);
+				attribute<Stops> 	StopRef:= rlookup(Geometry, Stops/point);
+				attribute<upoint> 	StopxMoment:= point(StopRef, Moment, upoint);
+			}
+			unit<uint32> Places:= unique(doubledLinks/Geometry) {
+				attribute<uint32>	ODRef:	 	expr = "rlookup(Values, ODs/point)";
+				attribute<uint32> 	StopRef:	expr = "rlookup(Values, Stops/point)";
+			}
+			unit<uint32> NodeSet: expr = "unique(doubledLinks/PlacexMoment)", DialogData = "Place", DialogType = "map" {
+				attribute<AllPlaces>PlaceRef:	expr = "pointRow(Values)";
+				attribute<Time>		TimeRef:	expr = "pointCol(Values)";
+				attribute<CoordSys> Place: 		expr = "AllPlaces/Values[PlaceRef]";
+			}
+			unit<uint32> UniqueStopXMoment: expr = "unique(doubledLinks/StopxMoment)" {
+				attribute<Stops> 	StopRef: 			expr = "pointRow(Values)[Stops]";
+				attribute<Time>    	TimeRef: 			expr = "pointCol(Values)[Time]";
+				attribute<string> 	LabelText:			expr = "Stops/Name[StopRef] + ' @ ' + Time/LabelText[TimeRef]";
+			}
+			attribute<uint32> LinkTypeSum (LinkTypes): expr = "pcount(LinkType)";
+			
+			unit<uint32> PT_modes:= select_with_org_rel(LinkTypes/IsPT_Vehicle && LinkTypeSum > 0) {
+				attribute<string> name:= org_rel->name;
+			}
+			
+			unit<uint32> NetCheck: 	expr = "connected_parts(F1, F2)";
+			
+		}
+		
 		
 		Template genTransfersByTime {
 			parameter<Stops> OriginStop;

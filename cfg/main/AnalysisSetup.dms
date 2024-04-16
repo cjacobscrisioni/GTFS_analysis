@@ -20,8 +20,8 @@ container AnalysesConfiguration: Using = "Definitions;DataManagement;" {
 		parameter<km_hr> 	TransferEffectiveSpeed: 	expr = "(WalkingSpeed[float32] / 1.2[float32])[km_hr]"; // expressed in kilometers per hour, modified for manhattan distances
 		parameter<km>		Regio_maxkms:				expr = "8.0[km]";
 		parameter<min_f> 	Regio_maxmins:				expr = "30[min_f]";
-		parameter<float32>  HalfLife_median:			expr = "float32(30)";
-		parameter<float32>  exp_b:						expr = "log(0.5f) / HalfLife_median"; // half life method by Osth, with 30 minute median, see https://journals.open.tudelft.nl/ejtir/article/view/3142/3328
+		parameter<float64>  HalfLife_median:			expr = "30d";
+		parameter<float64>  exp_b:						expr = "log(0.5d) / HalfLife_median"; // half life method by Osth, with 30 minute median, see https://journals.open.tudelft.nl/ejtir/article/view/3142/3328
 	}
 	
 	// binds most settings together
@@ -65,14 +65,14 @@ container AnalysesConfiguration: Using = "Definitions;DataManagement;" {
 			attribute<string> TemplatableText: 	expr = "Time/TemplatableText[Nr_OrgEntity]";
 			
 			unit<uint32> StructuredSamples: expr = "range(uint32, 0, sum(Hours/nSamples))" {
-				attribute<Hours> 	SampleH:= classify(id(.), Hours/cumu_samples)+1[Hours];
+				attribute<Hours> 	SampleH:= classify(id(.), Hours/cumu_samples)+1[hr];
 				attribute<uint32>	Cumul_SampleH:= cumulate(const(1,.,uint32), SampleH) - 1;
-				attribute<Time>		S: 	expr = "(SampleH * 60 * 60) + (60 * (Cumul_SampleH * (60 / Hours/nSamples[SampleH])))";
+				attribute<Time>		S: 	expr = "SampleH[Time] + (60 * (Cumul_SampleH * (60 / Hours/nSamples[SampleH])))";
 				attribute<Time> 	H:	expr = "S + (rnd_uniform(0,.,range(uint32, 0, (60 / SamplingResolution))) * 60)";
 			}
 			unit<uint32> SampleHours: NrOfRows = 4 {attribute<Hours> def: [2,7,10,22];}
-			unit<uint32> Hours: NrOfRows = 24 {
-				attribute<Hours> Hour:				expr = "id(.)";
+			unit<uint32> Hours:= range(hr, 0, 24) {
+				attribute<.> 	  Hour:				expr = "id(.)";
 				attribute<uint32> nSamples:			expr = "IsDefined(rlookup(Hour, SampleHours/def)) ? SamplingResolution : 0";
 				attribute<uint32> SamplingMinFrame:	expr = "MakeDefined(60 / nSamples, 0)"; 
 				attribute<uint32> cumu_samples:		expr = "cumulate(nSamples)";
@@ -84,4 +84,26 @@ container AnalysesConfiguration: Using = "Definitions;DataManagement;" {
 			attribute<string> 	Name:	expr = "Time/TemplatableText[Moment]";
 		}
 	}
+	unit<uint32> UnlinkedButtons: nrofrows = 5 {
+	
+		parameter<string> Study_area_placeholder:= 'X_StudyArea_X';
+		parameter<string> Analysis_placeholder:= 'X_Analysis_X';
+		
+		attribute<string> button_names: ['b0_store_feeds','b1_extract_roads','b2_optimise_net','b3_store_od_conns','b4_store_static_net'];
+		attribute<string> button_locations: [
+			'NetworkCreation/StudyAreaFeeds/X_StudyArea_X/storeFSS',
+			'NetworkCreation/StudyAreaPreparation/OD_sets/X_StudyArea_X/b1_gen_roads_file',
+			'NetworkCreation/RoadNets/X_Analysis_X/b1_optimisenetwork',
+			'NetworkCreation/RoadNets/X_Analysis_X/b2_create_od_conns',
+			'NetworkCreation/StaticNets/X_Analysis_X/b1_store_static_net'
+			];
+		attribute<string> files_stored_check: [
+			'/NetworkCreation/StudyAreaFeeds/X_StudyArea_X/Fss_Stored',
+			'NetworkCreation/StudyAreaPreparation/OD_sets/X_StudyArea_X/extracted_roads_already_stored',
+			'NetworkCreation/RoadNets/X_Analysis_X/optimised_networks_already_stored',
+			'NetworkCreation/RoadNets/X_Analysis_X/road_od_conn_paths_already_stored',
+			'NetworkCreation/StaticNets/X_Analysis_X/static_net_already_stored'
+		];
+	}
+	
 }

@@ -23,7 +23,7 @@ container GTFS_routing {
 		
 		unit<int32>   mm        := int32(0.001 * m);
 		unit<float64> m         := baseunit('meter', float64);
-		unit<float64> m2         := m * m;
+		unit<float64> m2        := m * m;
 		unit<float64> km        := 1000f * m;
 		unit<uint32>  s         := baseunit('second', uint32);
 		unit<float64> s_f       := baseunit('second', float64);
@@ -44,14 +44,16 @@ container GTFS_routing {
 			attribute<.>	  PrevRef: 		expr = "makedefined(sub_or_null(id(.), 1), 6)"; 
 			attribute<string> LabelText:	expr = "Name", DialogData = "LabelText";
 		}
-		unit<uint32> Time: 	   expr = "range(uint32, 0, (24*60*60)*2)" {
+		unit<uint32> Time: 	   expr = "range(s, 0, (24*60*60)*2)" {
 			attribute<Time>   Internal:			expr = "id(Time)";
 			attribute<uint32> Day:				expr = "id(.) / (24*60*60)";
-			attribute<uint32> Hour: 			expr = "id(.) / (60*60)";
-			attribute<uint32> Minute: 			expr = "mod(id(.) / 60, 60)";
-			attribute<uint32> Second:			expr = "mod(id(.), 60)";
-			attribute<string> LabelText:		expr = "(Hour < 10 ? '0' : '') + string(Hour) + ':' + (Minute < 10 ? '0' : '') + string(Minute) + ':' + (Second < 10 ? '0' : '') + string(Second)", DialogType = "LabelText";
-			attribute<string> TemplatableText: 	expr = "'At_'+(Hour < 10 ? '0' : '') + string(Hour) + 'h' + (Minute < 10 ? '0' : '') + string(Minute) + 'm' + (Second < 10 ? '0' : '') + string(Second) + 's'";
+			//attribute<hr> 	  Hour: 			expr = "(id(.) / (60*60))[hr]";
+			attribute<hr> 	  Hour: 			expr = "id(.)[hr]";
+			//attribute<min>    Minute: 			expr = "(mod(id(.) / 60, 60))[min]";
+			attribute<min>    Minute: 			expr = "id(.)[min] - Hour[min]";
+			attribute<s>      Second:			expr = "mod(id(.), 60)";
+			attribute<string> LabelText:		expr = "(Hour < 10[hr] ? '0' : '') + string(Hour) + ':' + (Minute < 10[min] ? '0' : '') + string(Minute) + ':' + (Second < 10[s] ? '0' : '') + string(Second)", DialogType = "LabelText";
+			attribute<string> TemplatableText: 	expr = "'At_'+(Hour < 10[hr] ? '0' : '') + string(Hour) + 'h' + (Minute < 10[min] ? '0' : '') + string(Minute) + 'm' + (Second < 10[s] ? '0' : '') + string(Second) + 's'";
 		}
 		container Geography {
 			unit<dpoint>  Base: Format     = "EPSG:4326" {
@@ -67,7 +69,7 @@ container GTFS_routing {
 			parameter<LambertEA> LeftBottom: Expr = "Origin";
 			parameter<LambertEA> LeftTop:    Expr = "point(pointcol(Origin), pointrow(Origin)+pointrow(Extent), LambertEA)";
 		}
-		unit<uint32> LinkTypes: NrOfRows = 7 {
+		unit<uint32> Configured_LinkTypes: NrOfRows = 7 {
 			attribute<string> 	Name: 		['Undefined','Scheduled','Transfer','Stop_to_OD','OD_to_Stop','Waiting_at_Stop','DirectWalking'];
 			attribute<float32>  SubjWeight: [1.0, 1.0, 1.84, 1.68, 1.68,  1.8, 1.68]; //Subjective travel time multipliers from Wardman et al (2014), table 5
 			attribute<string> 	LabelText: expr = "Name", DialogType = "LabelText";
@@ -77,6 +79,18 @@ container GTFS_routing {
 		}
 		#include<Modes.dms>
 		unit<uint32> Modes: expr = "ModesList/List";
+		
+		unit<uint32> LinkTypes:= union_unit(Modes, Configured_LinkTypes) {
+			attribute<string> Name:= union_data(., Modes/name, Configured_LinkTypes/Name);
+			attribute<string> Label:= Name;
+			attribute<float32> SubjWeight:= union_data(., const(1f,Modes,float32), Configured_LinkTypes/SubjWeight);
+			attribute<uint32> 	PenColor:= union_data(., const(rgb(200,0,0),Modes,uint32), Configured_LinkTypes/PenColor), DialogType = "PenColor";
+			attribute<int16>  	PenStyle:= union_data(., const(0,Modes,int16), Configured_LinkTypes/PenStyle), DialogType = "PenStyle";
+			attribute<Modes>	ModesRef:= union_data(., id(Modes), const(0 / 0,Configured_LinkTypes,Modes));
+			attribute<bool>		IsPT_Vehicle:= isdefined(ModesRef);
+			
+			container values: 	expr = "for_each_nedv(Name, string(id(LinkTypes)), void, LinkTypes)";
+		}
 		
 		//Roadnetwork types, used to select approach to generate od-connnections
 		unit<uint32> RoadNetworkGeneration: NrOfRows = 2 {
@@ -112,7 +126,7 @@ container GTFS_routing {
 			"', StudyAreaFeeds/'+Analyses/StudyAreaName+'/Links, StudyAreaPreparation/OD_sets/'+Analyses/StudyAreaName+'/OD_points/'+Analyses/ResolutionName+'/pts)')";
 	}
 	container Analyses:		expr = "for_each_ne(AnalysesConfiguration/Analyses/Name, "
-		"'do_Analysis_templates/GetStudyAreaResults(StaticNets/'+AnalysesConfiguration/Analyses/Name+','+quote(AnalysesConfiguration/Analyses/Name)+','+quote(AnalysesConfiguration/Analyses/Date_prefix)+')')", Using = "NetworkCreation;AnalysesConfiguration/TimeSampling;";
+		"'do_Analysis_templates/GetStudyAreaResults(StaticNets/'+AnalysesConfiguration/Analyses/Name+','+string(id(AnalysesConfiguration/Analyses))+','+quote(AnalysesConfiguration/Analyses/Date_prefix)+')')", Using = "NetworkCreation;AnalysesConfiguration/TimeSampling;";
 	
 	#include<rough_analyses.dms>
 	
@@ -121,5 +135,4 @@ container GTFS_routing {
 	#include<load_GTFS_templates.dms>
 	#include<road_Network_templates.dms>
 	#include<Templates.dms>
-	
 }

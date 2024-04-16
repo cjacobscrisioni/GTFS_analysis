@@ -14,6 +14,7 @@ container load_GTFS_templates: using = "DataManagement;" {
 		parameter<StudyAreas> inArea;
 		
 		parameter<bool> storeFSS: expr = "true", ExplicitSuppliers = "= AsList('LoadFeeds/'+RelevantFeeds/FeedName+'/storeFSS', ';')";
+		parameter<bool> Fss_Stored:= False; // placeholder waiting for more powerful existing file checks (entire gtfs conversion needs to be reworked)
 		
 		unit<uint32> RelevantFeeds: expr = "subset(FeedsPerStudyArea/Area_id = inArea)" {
 			attribute<string> FeedName: 	expr = "AvailableFeeds/Name[FeedsPerStudyArea/Feed_id[Nr_OrgEntity]]";
@@ -82,6 +83,7 @@ container load_GTFS_templates: using = "DataManagement;" {
 			attribute<Time> 			depTime: 			expr = "= 'union_data(.,'+AsItemList('LoadFeeds/'+RelevantFeeds/FeedName+'/ScheduledLinks/depTime')+')'";
 			attribute<Time> 			arrTime: 			expr = "= 'union_data(.,'+AsItemList('LoadFeeds/'+RelevantFeeds/FeedName+'/ScheduledLinks/arrTime')+')'";
 			attribute<Modes> 			Mode:				expr = "= 'union_data(.,'+AsItemList('LoadFeeds/'+RelevantFeeds/FeedName+'/ScheduledLinks/Mode')+')'";
+			attribute<LinkTypes>		LinkType:			expr = "rlookup(Mode, LinkTypes/ModesRef)";
 			attribute<upoint>			uni_fStopId:		expr = "point(feedId, OrgfromStop, upoint)";
 			attribute<upoint>			uni_tStopId:		expr = "point(feedId, OrgtoStop, upoint)";	
 			attribute<Stops>			FromStop:			expr = "rlookup(uni_fStopId, Stops/uni_StopId)";
@@ -211,6 +213,8 @@ container load_GTFS_templates: using = "DataManagement;" {
 	Template LoadGTFSfiles_Vilnius {
 		parameter<AvailableFeeds> 	inFeed;
 		parameter<bool> 			storefss: expr = "True", ExplicitSuppliers = "= AsList('LoadCsvs/'+File_Structure/Name+'/write_to_fss/to_fss',';')";
+		parameter<bool>				Fss_Stored:= False; // still need to include more powerful existingfile checks, this is basically a placeholder
+		
 		unit<uint32> File_Structure: NrOfRows = 8 {attribute<string> Name: ['agency','calendar','calendar_dates','routes','shapes','stop_times','stops','trips'];}
 		
 		container LoadCsvs: 	expr = "for_each_ne(File_Structure/Name, 'LoadCsvThroughGDAL(File_Structure,'+string(id(File_Structure))+',inFeed)')";
@@ -578,11 +582,11 @@ container load_GTFS_templates: using = "DataManagement;" {
 		unit<uint32> TimesVector: expr = "inVector" {
 			attribute<uint32>		hour_sep:	expr = "strpos(TimesString, ':')";
 			attribute<uint32>		sec_sep:	expr = "strrpos(TimesString, ':')";
-			attribute<uint32> 		hour:		expr = "uint32(substr(TimesString, 0, hour_sep))";
-			attribute<uint32>		min:		expr = "uint32(substr(TimesString, hour_sep + 1, sec_sep - hour_sep - 1))";
-			attribute<uint32>		sec:		expr = "uint32(substr(TimesString, sec_sep + 1, 2))";
-			attribute<uint32>		hoursyst:	expr = "makedefined(sub_or_null(hour, max(Time/Hour)), hour)";
-			attribute<Time>			TimeRef:	expr = "((hoursyst * 60 * 60) + (min * 60) + sec)[Time]";
+			attribute<hr> 			hour:		expr = "(substr(TimesString, 0, hour_sep))[hr]";
+			attribute<min>			minute:		expr = "(substr(TimesString, hour_sep + 1, sec_sep - hour_sep - 1))[min]";
+			attribute<s>			second:		expr = "(substr(TimesString, sec_sep + 1, 2))[s]";
+			attribute<hr>			hoursyst:	expr = "makedefined(sub_or_null(hour, max(Time/Hour)), hour)";
+			attribute<Time>			TimeRef:	expr = "(hoursyst[s] + minute[s] + second)[Time]";
 		}
 	}
 	

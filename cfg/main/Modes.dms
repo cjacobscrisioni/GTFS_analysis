@@ -8,7 +8,7 @@ For further information please contact chris.jacobs-crisioni@ec.europa.eu
 ***********************************************************************************************************************************/
 
 Container ModesList {
-	unit<uint32> List: NrOfRows = 84 {
+	unit<uint32> List: NrOfRows = 83 {
 		
 		// combines official modes list, as defined in the GTFS format, with the extended mode list, as eg used in the Vilnius feed. 
 		// For more information on the extended mode list see https://developers.google.com/transit/gtfs/reference/extended-route-types
@@ -33,13 +33,13 @@ Container ModesList {
 			'105',	'Sleeper_Rail_Service',
 			'106',	'Regional_Rail_Service',
 			'107',	'Tourist_Railway_Service',
-			'108',	'Rail_Shuttle_(Within_Complex)',
+			'108',	'Rail_Shuttle_Within_Complex',
 			'109',	'Suburban_Railway',
 			'110',	'Replacement_Rail_Service',
 			'111',	'Special_Rail_Service',
 			'112',	'Lorry_Transport_Rail_Service',
 			'113',	'All_Rail_Services',
-			'114',	'Cross-Country_Rail_Service',
+			'114',	'Cross_Country_Rail_Service',
 			'115',	'Vehicle_Transport_Rail_Service',
 			'116',	'Rack_and_Pinion_Railway',
 			'117',	'Additional_Rail_Service',

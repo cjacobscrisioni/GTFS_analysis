@@ -8,23 +8,37 @@ For further information please contact chris.jacobs-crisioni@ec.europa.eu
 ***********************************************************************************************************************************/
 
 container do_Analysis_templates: Using = "Definitions;" {
+	Template do_Analysis_Preparation {
+		parameter<AnalysesConfiguration/Analyses> inAnalysis;
+		
+		container Create_Files:= for_each_nedv(!buttons_list/file_checks ? buttons_list/button_names : '', buttons_list/actual_button_locations, void, bool);
+		container Recreate_Files:= for_each_nedv(buttons_list/file_checks ? buttons_list/button_names : '', buttons_list/actual_button_locations, void, bool);
+		
+		unit<uint32> buttons_list:= AnalysesConfiguration/UnlinkedButtons {
+			attribute<string> actual_button_locations:= replace(replace(button_locations, Study_area_placeholder, AnalysesConfiguration/Analyses/StudyAreaName[inAnalysis]), Analysis_placeholder, AnalysesConfiguration/Analyses/name[inAnalysis]);
+			attribute<string> actual_file_checks:= replace(replace(files_stored_check, Study_area_placeholder, AnalysesConfiguration/Analyses/StudyAreaName[inAnalysis]), Analysis_placeholder, AnalysesConfiguration/Analyses/name[inAnalysis]);
+			attribute<bool>   file_checks:= = 'union_data(., '+AsItemList(actual_file_checks)+')';
+		}
+	}
+
 	Template GetStudyAreaResults {
 		container inGenericLayer;
-		
-		parameter<string> AnalysisName;
+		parameter<AnalysesConfiguration/Analyses> inAnalysis;
 		parameter<string> Date_Prefix;
+		parameter<string> AnalysisName:= AnalysesConfiguration/Analyses/Name[inAnalysis];
 		
 		unit<uint32> MeasureMoments: expr = "AnalysesConfiguration/TimeSampling/MeasureMoments";
-		
 		parameter<string> BatchList: expr = "AsList(MeasureMoments/Name, ' ')";
+		
+		container Prepare_Analysis:= do_Analysis_Preparation(inAnalysis);
 		container NetworkResults: expr = "for_each_ne(MeasureMoments/Name, 'GetNetworkAnalysis('+string(MeasureMoments/Moment)+', inGenericLayer)')" {
 			container Run {
 				parameter<bool> Button:= True, ExplicitSuppliers = "= AsList(MeasureMoments/Name+'/ExportExtendedMatrix/result', ';')";
 			}
 			
-			container man_08h_00_00: expr = "GetNetworkAnalysis(28800, inGenericLayer)";
-			container man_11h_33_00: expr = "GetNetworkAnalysis(41580, inGenericLayer)";
-			container man_16h_12_00: expr = "GetNetworkAnalysis(58320, inGenericLayer)";
+			container man_08h_00_00: expr = "GetNetworkAnalysis(28800[s], inGenericLayer)";
+			container man_11h_33_00: expr = "GetNetworkAnalysis(41580[s], inGenericLayer)";
+			container man_16h_12_00: expr = "GetNetworkAnalysis(58320[s], inGenericLayer)";
 		}
 		container CombineResults{
 			attribute<string> path (MeasureMoments): expr = "'/NetworkAnalyses/'+AnalysisName+'/NetworkResults/'+MeasureMoments/Name+'/ODMatrix'";
@@ -58,14 +72,14 @@ container do_Analysis_templates: Using = "Definitions;" {
 	Template GetNetworkAnalysis: Using = "Definitions;" {
 		parameter<Time>		inTime;
 		container 			inGenericLayer;
-	
-		unit<uint32> 	  	Stops: 						expr = "inGenericLayer/Stops";
-		unit<uint32>		StopXMoments: 				expr = "inGenericLayer/allLinks/UniqueStopXMoment";
-		unit<uint32>		AllPlaces:					expr = "inGenericLayer/AllPlaces";
-		unit<uint32> 		StaticNet:					expr = "inGenericLayer/static_Net";
+		
+		unit<uint32>		AllPlaces:					expr = "inGenericLayer/load_Static_Net/Places";
+		unit<uint32> 	  	Stops: 						expr = "inGenericLayer/Stops" {attribute<AllPlaces> PlaceRef:= rlookup(point, AllPlaces/Values);}
+		unit<uint32>		StopXMoments: 				expr = "inGenericLayer/load_Static_Net/UniqueStopXMoment";
+		unit<uint32> 		StaticNet:					expr = "inGenericLayer/load_Static_Net";
 		unit<uint32>		WalkMatrix:					expr = "inGenericLayer/OD_walk_matrix";
 		unit<uint32> 		NodeSet:					expr = "CurrentNetwork/NodeSet";
-		unit<uint32>		ODs:						expr = "inGenericLayer/ODs";
+		unit<uint32>		ODs:						expr = "inGenericLayer/ODs" {attribute<AllPlaces> PlaceRef:= rlookup(geometry, AllPlaces/Values);}
 		unit<uint32>		ScheduledSpaceTimeEvents: 	expr = "inGenericLayer/ScheduledSpaceTimeEvents";
 		unit<uint32>		ODPathsByStart:				expr = "inGenericLayer/CreateODconnections/ODPathsByStart";
 		
@@ -80,14 +94,14 @@ container do_Analysis_templates: Using = "Definitions;" {
 			attribute<AllPlaces>	FromPlace:				expr = "ODs/PlaceRef[fromOD]";
 			attribute<AllPlaces>	ToPlace:				expr = "Stops/PlaceRef[toStop]";
 			attribute<Time>			fromTime:	 			expr = "const(inTime,.,Time)";
-			attribute<Time> 		Duration:				expr = "FromTime < ToTime ? ToTime - FromTime : (ToTime + #Time) - FromTime"; // duration in seconds
+			attribute<Time> 		Duration:				expr = "FromTime < ToTime ? sub_or_null(ToTime, FromTime) : (ToTime + #Time) - FromTime"; // duration in seconds
 			attribute<Time>			WaitingTime:			expr = "max_elem(Duration - WalkTime, 0)";
 			attribute<LinkTypes>	LinkType:				expr = "const(LinkTypes/Values/OD_to_Stop,.,LinkTypes)";
 			attribute<string>		LabelText:				expr = "'Walk to stop: ' + Time/LabelText[FromTime] + ' @ ' + ODs/Name[fromOD] + ' to ' + Time/LabelText[ToTime] + ' @ ' + Stops/Name[toStop]", DialogType = "LabelText";
 		}
 		
 		unit<uint32> CurrentNetwork: expr = "union_unit(StaticNet, OriginConnections)", DialogData = "Line", DialogType = "map" {
-			attribute<CoordSys>		Line (arc): 	expr = "union_data(., StaticNet/Line, 		OriginConnections/Line)";
+			attribute<CoordSys>		Line (arc): 	expr = "union_data(., StaticNet/Geometry, 		OriginConnections/Line)";
 			attribute<uint32>		Duration: 		expr = "union_data(., StaticNet/Duration, 	OriginConnections/Duration)";
 			attribute<float32>		SubjDuration:	expr = "float32(Duration) * LinkTypes/SubjWeight[LinkType]";
 			attribute<AllPlaces>	FromPlace:		expr = "union_data(., StaticNet/FromPlace, 	OriginConnections/FromPlace)";
@@ -98,7 +112,7 @@ container do_Analysis_templates: Using = "Definitions;" {
 			attribute<Time>			WaitingTime:	expr = "union_data(., StaticNet/LinkType = LinkTypes/Values/Waiting_at_Stop ? StaticNet/Duration : 0, OriginConnections/WaitingTime)";
 			attribute<Time>			WalkingTime:	expr = "union_data(., StaticNet/LinkType = LinkTypes/Values/Transfer || StaticNet/LinkType = LinkTypes/Values/Stop_to_OD ?  StaticNet/Duration : 0, OriginConnections/WalkTime)";
 			attribute<Time>			VehicleTime: 	expr = "uint32(LinkType = LinkTypes/Values/Scheduled) * Duration";
-			attribute<string>		LabelText:		expr = "union_data(., StaticNet/LabelText, 	OriginConnections/LabelText)", DialogType = "LabelText";
+			attribute<string>		LabelText:		expr = "union_data(., StaticNet/Label, 	OriginConnections/LabelText)", DialogType = "LabelText";
 			attribute<upoint>		FromPlaceTime:	expr = "point(FromPlace, FromTime)";
 			attribute<upoint>		ToPlaceTime:	expr = "point(ToPlace, ToTime)";
 			
@@ -109,14 +123,13 @@ container do_Analysis_templates: Using = "Definitions;" {
 			}
 			unit<uint32> Origins:	expr = "subset(pcount(OriginConnections/fromOD) > 0)" {
 				attribute<CoordSys> point:		expr = "ODs/point[Nr_OrgEntity]";
-				attribute<float32>	pop:		expr = "ODs/pop[Nr_OrgEntity]";
+				attribute<float32>	pop:		expr = "float32(ODs/pop[Nr_OrgEntity])";
 				attribute<upoint>  	PlaceTime: 	expr = "point(ODs/PlaceRef[Nr_OrgEntity], const(inTime,.,Time))";
 				attribute<NodeSet>	NodeRef: 	expr = "rlookup(PlaceTime, NodeSet/Values)";
 				attribute<string>	Name:		expr = "ODs/Name[Nr_OrgEntity]";
 			}	
 			unit<uint32> Destinations: 	expr = "subset(isDefined(NodeSet/ODRef))" {
 				attribute<NodeSet>	 NodeRef:	expr = "Nr_OrgEntity";
-				attribute<float32>	 Penalty:	expr = "const(0,.,float32)";
 				attribute<ODs>		 ODRef:		expr = "NodeSet/ODRef[Nr_OrgEntity]";
 			}
 			attribute<NodeSet> 		F1:			expr = "rlookup(FromPlaceTime, NodeSet/Values)";
@@ -127,152 +140,159 @@ container do_Analysis_templates: Using = "Definitions;" {
 		unit<uint32> ODMatrix: expr = "simpleOD/ODMatrix";
 		
 		parameter<string> pathname: expr = "PropValue(ODMatrix,'FullName')";
+		
 		//container 		ExportSimpleMatrix: 	expr = "Templates/TableComposer_uint32(simpleOD/ODMatrix, '%LocalDataProjDir%'+ pathname+'_simple.csv','From;To;sTotSecs;sVehicleSecs;sAltWalkingSecs;sDepTime;sArrTime')";
-		container 		ExportExtendedMatrix: 	expr = "Templates/TableComposer_uint32(extendedOD/ODMatrix, '%LocalDataProjDir%'+ pathname+'_extd.csv','From;To;sMostConventientMins;sPTnetMins;sDirectWalkingMins;sVehicleMins;sFirstWaitingMins;sTransferMins;sNTransfers;sWaitingMins;sForeAfterMins;sDepTime;sArrTime')";
+		container 		ExportExtendedMatrix: 	expr = "Templates/TableComposer_uint32(extendedOD/ODMatrix, '%LocalDataProjDir%'+ pathname+'_extd.csv',extendedOD/ODMatrix/exp_fields_list,extendedOD/ODMatrix/exp_refs_list)";
 		unit <uint32> 	ExportAccessIndicators: expr = "CurrentNetwork/Origins", StorageName = "= '%LocalDataProjDir%/'+pathname+'/ai_results.dbf'" {
 			attribute<CoordSys> Geometry	: 	expr = "point", StorageName = "= '%LocalDataProjDir%/'+pathname+'/ai_results.shp'";
 			//attribute<float32>  Veh_perc	:  	expr = "mean(ODMatrix/VehicleMins / ODMatrix/MostConvenientMins, ODMatrix/OrgZone_rel)";
-			attribute<float32>  Ai_m10 		: 	expr = "sum(ODs/Pop[ODMatrix/DstZone_rel] * ODmatrix/MostConvenientMins^float32(-1.0), ODMatrix/OrgZone_rel)";
-			attribute<float32>  Ai_m15 		: 	expr = "sum(ODs/Pop[ODMatrix/DstZone_rel] * ODmatrix/MostConvenientMins^float32(-1.5), ODMatrix/OrgZone_rel)";
-			attribute<float32>  Ai_m20		: 	expr = "sum(ODs/Pop[ODMatrix/DstZone_rel] * ODmatrix/MostConvenientMins^float32(-2.0), ODMatrix/OrgZone_rel)";
-			attribute<float32>	Ai_exp_hl	: 	expr = "sum(ODs/Pop[ODMatrix/DstZone_rel] * exp(AnalysesConfiguration/Parameters/exp_b * ODmatrix/MostConvenientMins), ODMatrix/OrgZone_rel)";
-			attribute<float32> 	AccPop		: 	expr = "sum(ODs/Pop[ODMatrix/DstZone_rel] * float32(ODmatrix/MostConvenientMins <= parameters/Regio_maxmins), ODMatrix/OrgZone_rel)";
-			attribute<float32> 	SurrPop		: 	expr = "sum(ODs/Pop[ODMatrix/DstZone_rel] * float32(ODmatrix/DirectWalkingKm <= parameters/Regio_maxkms), ODMatrix/OrgZone_rel)";
-			attribute<float32> 	TransPerf	:	expr = "AccPop / SurrPop";
+			attribute<float64>  Ai_m10 		: 	expr = "sum(float64(ODs/Pop)[ODMatrix/DstZone_rel] * ODmatrix/MostConvenientMins^-1.0d, ODMatrix/OrgZone_rel)";
+			attribute<float64>  Ai_m15 		: 	expr = "sum(float64(ODs/Pop)[ODMatrix/DstZone_rel] * ODmatrix/MostConvenientMins^-1.5d, ODMatrix/OrgZone_rel)";
+			attribute<float64>  Ai_m20		: 	expr = "sum(float64(ODs/Pop)[ODMatrix/DstZone_rel] * ODmatrix/MostConvenientMins^-2.0d, ODMatrix/OrgZone_rel)";
+			attribute<float64>	Ai_exp_hl	: 	expr = "sum(float64(ODs/Pop)[ODMatrix/DstZone_rel] * exp(AnalysesConfiguration/Parameters/exp_b * ODmatrix/MostConvenientMins), ODMatrix/OrgZone_rel)";
+			attribute<float64> 	AccPop		: 	expr = "sum(float64(ODs/Pop)[ODMatrix/DstZone_rel] * float64(ODmatrix/MostConvenientMins <= parameters/Regio_maxmins), ODMatrix/OrgZone_rel)";
+			attribute<float64> 	SurrPop		: 	expr = "sum(float64(ODs/Pop)[ODMatrix/DstZone_rel] * float64(ODmatrix/DirectWalkingKm <= parameters/Regio_maxkms), ODMatrix/OrgZone_rel)";
+			attribute<float64> 	TransPerf	:	expr = "AccPop / SurrPop";
 			attribute<string> 	sDepTime	:	expr = "Date_prefix + const(Time/LabelText[inTime],.,string)";
 		}
-		
-		Template GenODMatrix_simple {
-			unit<uint32> ODMatrix: 
-				expr = "dijkstra_m('directed;startPoint(Node_rel);endPoint(Node_rel,impedance,DstZone_rel);limit(OrgZone_max_mass,DstZone_mass);alternative(link_imp):alt_imp;od:impedance,OrgZone_rel,DstZone_rel',"
-					"float32(CurrentNetwork/SubjDuration), CurrentNetwork/F1, CurrentNetwork/F2, CurrentNetwork/Origins/NodeRef, "
-					"CurrentNetwork/Destinations/NodeRef, CurrentNetwork/Destinations/Penalty, CurrentNetwork/Destinations/ODRef, "
-					"float32(#ODs), float32(1), float32(CurrentNetwork/Duration))" {
-				attribute<float32> SubjDuration:		expr = "Impedance";
-				attribute<Time>	   PTNetSecs:			expr = "alt_imp[Time]";
-				attribute<float32> PTnetMins: 			expr = "float32(PTNetSecs) / float32(60)";
-				attribute<Time>    DirectWalkingSecs:	expr = "WalkMatrix/Duration[wm_id]";
-				attribute<float32> DirectWalkingMins:	expr = "float32(DirectWalkingSecs) / 60f";
-				attribute<float32> DirectWalkingKm:		expr = "float32(WalkMatrix/Distance[wm_id]) / 1000f";
-				attribute<uint32>  UsesPT:				expr = "uint32(SubjDuration < WalkMatrix/SubjDuration[wm_id])";
-				attribute<Time>	   MostConvenientSecs:  expr = "Impedance > WalkMatrix/SubjDuration[wm_id] ? DirectWalkingSecs : PTnetSecs";
-				attribute<float32> MostConvenientMins:  expr = "float32(MostConvenientSecs) / 60f";
-				attribute<string>  sTotSecs:			expr = "string(MostConvenientSecs)";
-				attribute<string>  sAltWalkingSecs:	 	expr = "string(WalkMatrix/Duration[wm_id])";
-				attribute<string>  From:				expr = "CurrentNetwork/Origins/Name[OrgZone_rel]";
-				attribute<string>  To:					expr = "ODs/Name[DstZone_rel]";
-				//attribute<string> 	sdepTime:		expr = "first(RelevantFeeds/Date_Prefix) +  Time/LabelText[depTime]";
-				attribute<string>  sDepTime:			expr = "Date_prefix + const(Time/LabelText[inTime],.,string)";
-				attribute<string>  sArrTime:			expr = "Date_prefix + ((inTime + MostConvenientSecs) < #Time ? Time/LabelText[inTime + MostConvenientSecs] : Time/LabelText[(inTime + MostConvenientSecs) - #Time])";
-				attribute<uint32>  nOrg (CurrentNetwork/Origins):		expr = "pcount(OrgZone_rel)";
-				attribute<uint32>  nDest(ODs):			expr = "pcount(DstZone_rel)";
-				attribute<WalkMatrix>	wm_id:			expr = "rlookup(point(OrgZone_rel, DstZone_rel, upoint), WalkMatrix/uni_id)";
-			 }
-		}
-		Template GenODMatrix_extended {
-			unit<uint32> ODMatrix: expr = "dijkstra_m('directed;startPoint(Node_rel);endPoint(Node_rel,impedance,DstZone_rel);limit(OrgZone_max_mass,DstZone_mass);od:impedance,OrgZone_rel,DstZone_rel,LinkSet',"
-			 "float32(CurrentNetwork/SubjDuration), CurrentNetwork/F1, CurrentNetwork/F2, CurrentNetwork/Origins/NodeRef, CurrentNetwork/Destinations/NodeRef, CurrentNetwork/Destinations/Penalty, CurrentNetwork/Destinations/ODRef, float32(#ODs), float32(1))" {
-			//unit<uint32> ODMatrix: expr = "dijkstra_m('directed;startPoint(Node_rel);endPoint(Node_rel);od:impedance,OrgZone_rel,DstZone_rel,LinkSet',"
-			 //"float32(CurrentNetwork/Duration), CurrentNetwork/F1, CurrentNetwork/F2, ODs/OrgNode, ODs/DestNode)" {
-				unit<uint32> links := sequence2points(linkset) {
-					attribute<CoordSys> Line (arc): 	expr = "CurrentNetwork/Line[links/Point]";
-					attribute<Time>		depTime:		expr = "CurrentNetwork/FromTime[links/Point]";
-					attribute<Time>		arrTime:		expr = "CurrentNetwork/ToTime[links/Point]";
-					attribute<Time>		Waiting:		expr = "CurrentNetwork/WaitingTime[links/Point]";
-					attribute<Time>		Seconds:		expr = "CurrentNetwork/Duration[links/Point]";
-					attribute<float32>	Minutes:		expr = "float32(Seconds) / 60f";
-					attribute<float32> 	WaitingMins:	expr = "float32(Waiting) / 60f";
-					attribute<LinkTypes>LinkType:		expr = "CurrentNetwork/LinkType[links/Point]";
-					attribute<ODs>		from:			expr = "OrgZone_rel[SequenceNr]";
-					attribute<ODs>		to:				expr = "DstZone_rel[SequenceNr]";
-				} 
-				attribute<Time>	   PTnetSecs:			expr = "sum(links/Seconds, links/SequenceNr)[Time]";
-				attribute<float32> PTnetMins: 			expr = "float32(Impedance) / float32(60)";
-				attribute<float32> VehicleMins:			expr = "Impedance > WalkMatrix/SubjDuration[wm_id] ? 0f : sum(float32(links/LinkType = LinkTypes/Values/Scheduled) * links/Minutes, links/SequenceNr)";
-				attribute<float32> FirstWaitingMins:	expr = "sum(float32(links/LinkType = LinkTypes/Values/OD_to_Stop) * links/WaitingMins, links/SequenceNr)";
-				attribute<float32> TransferMins:		expr = "sum(float32(links/LinkType = LinkTypes/Values/Transfer) * links/Minutes, links/SequenceNr)";
-				attribute<float32> WaitingMins:			expr = "sum(float32(links/LinkType = LinkTypes/Values/Waiting_at_Stop) * links/Minutes, links/SequenceNr)";
-				attribute<float32> ForeAfterMins:		expr = "sum(float32(links/LinkType = LinkTypes/Values/Stop_to_OD || links/LinkType = LinkTypes/Values/OD_to_Stop) * (links/Minutes - links/WaitingMins), links/SequenceNr)";
-				attribute<float32> nTransferLinks:		expr = "sum(float32(links/LinkType = LinkTypes/Values/Transfer), links/SequenceNr)";
-				attribute<Time>    DirectWalkingSecs:	expr = "(WalkMatrix/Duration[wm_id])[Time]";
-				attribute<float32> DirectWalkingMins:	expr = "float32(DirectWalkingSecs) / 60f";
-				attribute<float32> DirectWalkingKm:		expr = "float32(WalkMatrix/Distance[wm_id] / float32(1000))";
-				attribute<Time>	   MostConvenientSecs:  expr = "Impedance > WalkMatrix/SubjDuration[wm_id] ? DirectWalkingSecs : PTnetSecs";
-				attribute<float32> MostConvenientMins:  expr = "float32(MostConvenientSecs) / 60f";
-				attribute<string>  sPTnetMins:			expr = "substr(string(PTnetMins), 0, 5)";
-				attribute<string>  sVehicleMins:		expr = "substr(string(VehicleMins), 0, 5)";
-				attribute<string>  sFirstWaitingMins: 	expr = "substr(string(FirstWaitingMins), 0, 5)";
-				attribute<string>  sTransferMins: 		expr = "substr(string(TransferMins), 0, 5)";
-				attribute<string>  sNTransfers: 		expr = "substr(string(nTransferLinks), 0, 5)";
-				attribute<string>  sWaitingMins: 		expr = "substr(string(WaitingMins), 0, 5)";
-				attribute<string>  sForeAfterMins: 		expr = "substr(string(ForeAfterMins), 0, 5)";
-				attribute<string>  sDirectWalkingMins: 	expr = "substr(string(DirectWalkingMins), 0, 5)";
-				attribute<string>  sMostConventientMins:expr = "substr(string(MostConvenientMins), 0, 5)";
-				attribute<string>  From:				expr = "CurrentNetwork/Origins/Name[OrgZone_rel]";
-				attribute<string>  To:					expr = "ODs/Name[DstZone_rel]";
-				attribute<string>  sDepTime:			expr = "Date_prefix + const(Time/LabelText[inTime],.,string)";
-				attribute<string>  sArrTime:			expr = "Date_prefix + ((inTime + MostConvenientSecs) < #Time ? Time/LabelText[inTime + MostConvenientSecs] : Time/LabelText[(inTime + MostConvenientSecs) - #Time])";
-				attribute<uint32>  nOrg (CurrentNetwork/Origins):			expr = "pcount(OrgZone_rel)";
-				attribute<uint32>  nDest(ODs):			expr = "pcount(DstZone_rel)";
-				attribute<WalkMatrix>	wm_id:			expr = "rlookup(point(OrgZone_rel, DstZone_rel, upoint), WalkMatrix/uni_id)";
-				
-				container OrgZoneLinks: expr = "for_each_ne(ODs/Name, 'getLinksPerOrgZone('+ string(id(ODs))+')')";
-				
-			}
-		}
-		
-		Template genODPathsByTime {
-			parameter<Time>  inTime;
-			parameter<Stops> OriginStop;
-			unit<uint32> 	 ScheduledSpaceTimeEvents;
-			unit<uint32> 	 ODpaths;
+	}
+	Template GenODMatrix_simple {
+		unit<uint32> ODMatrix: 
+			expr = "dijkstra_m('directed;startPoint(Node_rel);endPoint(Node_rel,DstZone_rel);limit(OrgZone_max_mass,DstZone_mass);alternative(link_imp):alt_imp;od:impedance,OrgZone_rel,DstZone_rel',"
+				"float32(CurrentNetwork/SubjDuration), CurrentNetwork/F1, CurrentNetwork/F2, CurrentNetwork/Origins/NodeRef, "
+				"CurrentNetwork/Destinations/NodeRef, CurrentNetwork/Destinations/ODRef, "
+				"float32(#ODs), float32(1), float32(CurrentNetwork/Duration))" {
+			attribute<float32> SubjDuration:		expr = "Impedance";
+			attribute<Time>	   PTNetSecs:			expr = "alt_imp[Time]";
+			attribute<min_f>   PTnetMins: 			expr = "float32(PTNetSecs)[min_f]";
+			attribute<Time>    DirectWalkingSecs:	expr = "WalkMatrix/Duration[wm_id]";
+			attribute<min_f>   DirectWalkingMins:	expr = "DirectWalkingSecs[min_f]";
+			attribute<km> 	   DirectWalkingKm:		expr = "(WalkMatrix/Distance[wm_id])[km]";
+			attribute<uint32>  UsesPT:				expr = "uint32(SubjDuration < WalkMatrix/SubjDuration[wm_id])";
+			attribute<Time>	   MostConvenientSecs:  expr = "Impedance > WalkMatrix/SubjDuration[wm_id] ? DirectWalkingSecs : PTnetSecs";
+			attribute<min_f>   MostConvenientMins:  expr = "MostConvenientSecs[min_f]";
+			attribute<string>  sTotSecs:			expr = "string(MostConvenientSecs)";
+			attribute<string>  sAltWalkingSecs:	 	expr = "string(WalkMatrix/Duration[wm_id])";
+			attribute<string>  From:				expr = "CurrentNetwork/Origins/Name[OrgZone_rel]";
+			attribute<string>  To:					expr = "ODs/Name[DstZone_rel]";
+			attribute<string>  sDepTime:			expr = "Date_prefix + const(Time/LabelText[inTime],.,string)";
+			attribute<string>  sArrTime:			expr = "Date_prefix + ((inTime + MostConvenientSecs) < #Time ? Time/LabelText[inTime + MostConvenientSecs] : Time/LabelText[sub_or_null(inTime + MostConvenientSecs, #Time)])";
+			attribute<uint32>  nOrg (CurrentNetwork/Origins):		expr = "pcount(OrgZone_rel)";
+			attribute<uint32>  nDest(ODs):			expr = "pcount(DstZone_rel)";
+			attribute<WalkMatrix>	wm_id:			expr = "rlookup(point(OrgZone_rel, DstZone_rel, upoint), WalkMatrix/uni_id)";
+		 }
+	}
+	Template GenODMatrix_extended {
+		unit<uint32> ODMatrix: expr = "dijkstra_m('directed;startPoint(Node_rel);endPoint(Node_rel,DstZone_rel);limit(OrgZone_max_mass,DstZone_mass);od:impedance,OrgZone_rel,DstZone_rel,LinkSet',"
+		 "float32(CurrentNetwork/SubjDuration), CurrentNetwork/F1, CurrentNetwork/F2, CurrentNetwork/Origins/NodeRef, CurrentNetwork/Destinations/NodeRef, CurrentNetwork/Destinations/ODRef, float32(#ODs), float32(1))" {
+		//unit<uint32> ODMatrix: expr = "dijkstra_m('directed;startPoint(Node_rel);endPoint(Node_rel);od:impedance,OrgZone_rel,DstZone_rel,LinkSet',"
+		 //"float32(CurrentNetwork/Duration), CurrentNetwork/F1, CurrentNetwork/F2, ODs/OrgNode, ODs/DestNode)" {
+			unit<uint32> links := sequence2points(linkset) {
+				attribute<CoordSys> Line (arc): 	expr = "CurrentNetwork/Line[links/Point]";
+				attribute<Time>		depTime:		expr = "CurrentNetwork/FromTime[links/Point]";
+				attribute<Time>		arrTime:		expr = "CurrentNetwork/ToTime[links/Point]";
+				attribute<Time>		Waiting:		expr = "CurrentNetwork/WaitingTime[links/Point]";
+				attribute<Time>		Seconds:		expr = "CurrentNetwork/Duration[links/Point]";
+				attribute<min_f>	Minutes:		expr = "(Seconds)[min_f]";
+				attribute<min_f> 	WaitingMins:	expr = "(Waiting)[min_f]";
+				attribute<LinkTypes>LinkType:		expr = "CurrentNetwork/LinkType[links/Point]";
+				attribute<ODs>		from:			expr = "CurrentNetwork/Origins/Nr_OrgEntity[OrgZone_rel[SequenceNr]]";
+				attribute<ODs>		to:				expr = "DstZone_rel[SequenceNr]";
+			} 
+			attribute<s>	   PTnetSecs:			expr = "sum(links/Seconds, links/SequenceNr)[Time]";
+			attribute<min_f>   PTnetMins: 			expr = "PTnetSecs[min_f]";
+			attribute<min_f>   VehicleMins:			expr = "Impedance > WalkMatrix/SubjDuration[wm_id] ? 0[min_f] : sum(LinkTypes/IsPT_vehicle[links/LinkType] ? links/Minutes : 0[min_f], links/SequenceNr)";
+			attribute<min_f>   FirstWaitingMins:	expr = "sum(links/LinkType = LinkTypes/Values/OD_to_Stop ? links/WaitingMins : 0[min_f], links/SequenceNr)";
+			attribute<min_f>   TransferMins:		expr = "sum(links/LinkType = LinkTypes/Values/Transfer ? links/Minutes : 0[min_f], links/SequenceNr)";
+			attribute<min_f>   WaitingMins:			expr = "sum(links/LinkType = LinkTypes/Values/Waiting_at_Stop ? links/Minutes : 0[min_f], links/SequenceNr)";
+			attribute<min_f>   FirstLegMins:		expr = "sum(links/LinkType = LinkTypes/Values/OD_to_Stop ? (links/Minutes - links/WaitingMins) : 0[min_f], links/SequenceNr)";
+			attribute<min_f>   LastLegMins:		    expr = "sum(links/LinkType = LinkTypes/Values/Stop_to_OD ? (links/Minutes - links/WaitingMins) : 0[min_f], links/SequenceNr)";
+			attribute<uint32>  nTransferLinks:		expr = "sum(uint32(links/LinkType = LinkTypes/Values/Transfer), links/SequenceNr)";
+			attribute<Time>    DirectWalkingSecs:	expr = "(WalkMatrix/Duration[wm_id])[Time]";
+			attribute<min_f>   DirectWalkingMins:		expr = "DirectWalkingSecs[min_f]";
+			attribute<km> 	   DirectWalkingKm:		expr = "WalkMatrix/Distance[wm_id]";
+			attribute<Time>	   MostConvenientSecs:  expr = "Impedance > WalkMatrix/SubjDuration[wm_id] ? DirectWalkingSecs : PTnetSecs";
+			attribute<min_f>   MostConvenientMins:  expr = "MostConvenientSecs[min_f]";
 			
-			unit<uint32> Times:		expr = "subset(ScheduledSpaceTimeEvents/StopRef = OriginStop)" {
-				attribute<Time>    	TimeRef: 			expr = "ScheduledSpaceTimeEvents/TimeRef[Nr_OrgEntity]";
-			}
-			unit<uint32> Paths: expr = "subset(ODPaths/From = OriginStop)" {
-				attribute<Stops>  			toStop:				expr = "const(OriginStop,.,Stops)";
-				attribute<ODs> 				fromOD:				expr = "ODPaths/to[Nr_OrgEntity]";
-				attribute<CoordSys>			Line (arc):			expr = "ODPaths/Line[Nr_OrgEntity]";
-				attribute<float64>			Distance:			expr = "ODPaths/Distance[Nr_OrgEntity]";	
-				attribute<Time>				minWalkingTime:		expr = "ODPaths/minWalkingTime[Nr_OrgEntity]";
-				attribute<Time>				fromTime:			expr = "const(inTime,.,Time)";
-				attribute<Time>				min_arrival:		expr = "fromTime + minWalkingTime < #Time ? fromTime + minWalkingTime : fromTime + minWalkingTime - #Time";
-				attribute<Time>				toTime:				expr = "ODPathsByTime/ScheduledStopTime[toTimeRel]";
-				attribute<ODPathsByTime>	toTimeRel:			expr = "min_index(ODpathsByTime/to_first_moment, ODpathsByTime/nr_2)";
-			}
-			unit<uint32> ODPathsByTime: 	expr = "combine(Times, Paths)" {
-				attribute<CoordSys>	Line (arc):			expr = "Paths/Line[nr_2]";
-				attribute<Stops> 	toStop:				expr = "Paths/from[nr_2]"; 			
-				attribute<ODs> 		From:				expr = "Paths/to[nr_2]"; 	
-				attribute<Time>		fromTime:			expr = "Paths/fromTime[nr_2]";
-				attribute<Time>		min_arrival:		expr = "Paths/min_arrival[nr_2]";
-				attribute<Time> 	ScheduledStopTime:	expr = "Times/TimeRef[nr_1]";
-				attribute<Time>		to_first_moment:	expr = "ScheduledStopTime > min_arrival ?  ScheduledStopTime - min_arrival : (ScheduledStopTime + #Time) - min_arrival";			
-			}
+			attribute<string>  sPTnetMins:			expr = "substr(string(PTnetMins), 0, 5)";
+			attribute<string>  sVehicleMins:		expr = "substr(string(VehicleMins), 0, 5)";
+			attribute<string>  sFirstWaitingMins: 	expr = "substr(string(FirstWaitingMins), 0, 5)";
+			attribute<string>  sTransferMins: 		expr = "substr(string(TransferMins), 0, 5)";
+			attribute<string>  sNTransfers: 		expr = "substr(string(nTransferLinks), 0, 5)";
+			attribute<string>  sWaitingMins: 		expr = "substr(string(WaitingMins), 0, 5)";
+			attribute<string>  sFirstLegMins: 		expr = "substr(string(FirstLegMins), 0, 5)";
+			attribute<string>  sLastLegMins: 		expr = "substr(string(LastLegMins), 0, 5)";
+			attribute<string>  sDirectWalkingMins: 	expr = "substr(string(DirectWalkingMins), 0, 5)";
+			attribute<string>  sMostConventientMins:expr = "substr(string(MostConvenientMins), 0, 5)";
+			attribute<string>  From:				expr = "CurrentNetwork/Origins/Name[OrgZone_rel]";
+			attribute<string>  To:					expr = "ODs/Name[DstZone_rel]";
+			attribute<string>  sDepTime:			expr = "Date_prefix + const(Time/LabelText[inTime],.,string)";
+			attribute<string>  sArrTime:			expr = "Date_prefix + ((inTime + MostConvenientSecs) < #Time ? Time/LabelText[inTime + MostConvenientSecs] : Time/LabelText[sub_or_null(inTime + MostConvenientSecs, #Time)])";
+			attribute<uint32>  nOrg (CurrentNetwork/Origins):			expr = "pcount(OrgZone_rel)";
+			attribute<uint32>  nDest(ODs):			expr = "pcount(DstZone_rel)";
+			attribute<WalkMatrix>	wm_id:			expr = "rlookup(point(OrgZone_rel, DstZone_rel, upoint), WalkMatrix/uni_id)";
+			
+			container SplitVehicleMins:= for_each_nedv(StaticNet/PT_modes/name, 'sum(links/LinkType = '+string(StaticNet/PT_modes/org_rel)+' ? links/Minutes : 0[min_f], links/SequenceNr)', ODMatrix, min_f);
+			container s_SplitVehicleMins:= for_each_nedv(StaticNet/PT_modes/name+'_mins', 'substr(string(SplitVehicleMins/'+StaticNet/PT_modes/name+'), 0, 5)', ODMatrix, string);
+			
+			parameter<string> exp_fields_list:= 'From;To;sMostConventientMins;sPTnetMins;sDirectWalkingMins;sVehicleMins;sFirstWaitingMins;sTransferMins;sNTransfers;sWaitingMins;sFirstLegMins;sLastLegMins;sDepTime;sArrTime;'+aslist(StaticNet/PT_modes/name+'_mins', ';');
+			parameter<string> exp_refs_list:= 'From;To;sMostConventientMins;sPTnetMins;sDirectWalkingMins;sVehicleMins;sFirstWaitingMins;sTransferMins;sNTransfers;sWaitingMins;sFirstLegMins;sLastLegMins;sDepTime;sArrTime;'+aslist('s_SplitVehicleMins/'+StaticNet/PT_modes/name+'_mins', ';');
+			
+			container OrgZoneLinks: expr = "for_each_ne(ODs/Name, 'getLinksPerOrgZone('+ string(id(ODs))+')')";
+			
 		}
-		Template getLinksPerOrgZone {
-			parameter<ODs> inZone;
-			unit<uint32> links: expr = "subset(extendedOD/ODMatrix/links/from = inZone)", DialogData = "Line", DialogType = "map" {
-				attribute<CoordSys> Line (arc): expr = "extendedOD/ODMatrix/links/Line[Nr_OrgEntity]";
-				attribute<ODs>		DestZone:	expr = "extendedOD/ODMatrix/links/to[Nr_OrgEntity]";
-			}
-			unit<uint32> export: expr = "links", StorageName = "= '%LocalDataProjDir%'+ PropValue(links,'FullName')+'.dbf'" {
-				attribute<CoordSys> Geometry (arc): expr = "Line", StorageName = "= '%LocalDataProjDir%'+ PropValue(links,'FullName')+'.shp'";
-				attribute<LinkTypes>LinkType:		expr = "extendedOD/ODMatrix/links/LinkType[Nr_OrgEntity]";
-				attribute<uint32>	toid:			expr = "DestZone";
-				attribute<string> 	to: 			expr = "ODs/Name[DestZone]";
-				attribute<string>	depTime:		expr = "Date_prefix + Time/LabelText[extendedOD/ODMatrix/links/depTime[Nr_OrgEntity]]";
-				attribute<string>	arrTime:		expr = "Date_prefix + Time/LabelText[extendedOD/ODMatrix/links/arrTime[Nr_OrgEntity]]";
-			}
-			container DstZoneLinks: expr = "for_each_ne(ODs/Name, 'getLinksPerDestZone('+ string(id(ODs))+')')";
-		}
-		Template getLinksPerDestZone {
-			parameter<ODs> inZone;
-			unit<uint32> pairlinks: expr = "subset(links/DestZone = inZone)", DialogData = "Line", DialogType = "map" {
-				attribute<CoordSys> Line (arc): expr = "links/Line[Nr_OrgEntity]";
-			}
-		}
+	}
+	
+	Template genODPathsByTime {
+		parameter<Time>  inTime;
+		parameter<Stops> OriginStop;
+		unit<uint32> 	 ScheduledSpaceTimeEvents;
+		unit<uint32> 	 ODpaths;
 		
+		unit<uint32> Times:		expr = "subset(ScheduledSpaceTimeEvents/StopRef = OriginStop)" {
+			attribute<Time>    	TimeRef: 			expr = "ScheduledSpaceTimeEvents/TimeRef[Nr_OrgEntity]";
+		}
+		unit<uint32> Paths: expr = "subset(ODPaths/From = OriginStop)" {
+			attribute<Stops>  			toStop:				expr = "const(OriginStop,.,Stops)";
+			attribute<ODs> 				fromOD:				expr = "ODPaths/to[Nr_OrgEntity]";
+			attribute<CoordSys>			Line (arc):			expr = "ODPaths/Line[Nr_OrgEntity]";
+			attribute<float64>			Distance:			expr = "ODPaths/Distance[Nr_OrgEntity]";	
+			attribute<Time>				minWalkingTime:		expr = "ODPaths/minWalkingTime[Nr_OrgEntity]";
+			attribute<Time>				fromTime:			expr = "const(inTime,.,Time)";
+			attribute<Time>				min_arrival:		expr = "fromTime + minWalkingTime < #Time ? fromTime + minWalkingTime : fromTime + minWalkingTime - #Time";
+			attribute<Time>				toTime:				expr = "ODPathsByTime/ScheduledStopTime[toTimeRel]";
+			attribute<ODPathsByTime>	toTimeRel:			expr = "min_index(ODpathsByTime/to_first_moment, ODpathsByTime/nr_2)";
+		}
+		unit<uint32> ODPathsByTime: 	expr = "combine(Times, Paths)" {
+			attribute<CoordSys>	Line (arc):			expr = "Paths/Line[nr_2]";
+			attribute<Stops> 	toStop:				expr = "Paths/from[nr_2]"; 			
+			attribute<ODs> 		From:				expr = "Paths/to[nr_2]"; 	
+			attribute<Time>		fromTime:			expr = "Paths/fromTime[nr_2]";
+			attribute<Time>		min_arrival:		expr = "Paths/min_arrival[nr_2]";
+			attribute<Time> 	ScheduledStopTime:	expr = "Times/TimeRef[nr_1]";
+			attribute<Time>		to_first_moment:	expr = "ScheduledStopTime > min_arrival ?  ScheduledStopTime - min_arrival : (ScheduledStopTime + #Time) - min_arrival";			
+		}
+	}
+	Template getLinksPerOrgZone {
+		parameter<ODs> inZone;
+		unit<uint32> links: expr = "subset(extendedOD/ODMatrix/links/from = inZone)", DialogData = "Line", DialogType = "map" {
+			attribute<CoordSys> Line (arc): expr = "extendedOD/ODMatrix/links/Line[Nr_OrgEntity]";
+			attribute<ODs>		DestZone:	expr = "extendedOD/ODMatrix/links/to[Nr_OrgEntity]";
+		}
+		unit<uint32> export: expr = "links", StorageName = "= '%LocalDataProjDir%'+ PropValue(links,'FullName')+'.dbf'" {
+			attribute<CoordSys> Geometry (arc): expr = "Line", StorageName = "= '%LocalDataProjDir%'+ PropValue(links,'FullName')+'.shp'";
+			attribute<LinkTypes>LinkType:		expr = "extendedOD/ODMatrix/links/LinkType[Nr_OrgEntity]";
+			attribute<uint32>	toid:			expr = "DestZone";
+			attribute<string> 	to: 			expr = "ODs/Name[DestZone]";
+			attribute<string>	depTime:		expr = "Date_prefix + Time/LabelText[extendedOD/ODMatrix/links/depTime[Nr_OrgEntity]]";
+			attribute<string>	arrTime:		expr = "Date_prefix + Time/LabelText[extendedOD/ODMatrix/links/arrTime[Nr_OrgEntity]]";
+		}
+		container DstZoneLinks: expr = "for_each_ne(ODs/Name, 'getLinksPerDestZone('+ string(id(ODs))+')')";
+	}
+	Template getLinksPerDestZone {
+		parameter<ODs> inZone;
+		unit<uint32> pairlinks: expr = "subset(links/DestZone = inZone)", DialogData = "Line", DialogType = "map" {
+			attribute<CoordSys> Line (arc): expr = "links/Line[Nr_OrgEntity]";
+		}
 	}
 }

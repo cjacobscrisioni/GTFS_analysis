@@ -148,18 +148,20 @@ Container Templates {
 	   // ExportDomain is a domain unit 
 	   // with two attributes as subitems configured: id & Dist
 	   parameter<String> Fieldlist      := 'id;Dist';
+	   parameter<string> FieldRefList   := FieldList;
 	   parameter<String> FieldSeparator := ';';
 	   
 
 	   unit<uint32> Field := range(uint32,0,strcount(Fieldlist,';')+1)
 	   {
 		  attribute<string> Name := ReadArray(FieldList,.,string,0);
+		  attribute<string> Ref  := ReadArray(FieldRefList,.,string,0);
 	   }
 	   parameter<string> NewLine := '\n';
 	   parameter<String> Header  := FieldList;
 	   attribute<String> Body (context) :=
 		  =AsList(
-			 +'String(context/'+Field/Name+')',' + '+Quote(FieldSeparator)+' +'
+			 +'String(context/'+Field/Ref+')',' + '+Quote(FieldSeparator)+' +'
 		  );
 	  
 	   parameter<String> Result:= Header + NewLine + AsList(Body, NewLine)
